@@ -6,6 +6,7 @@ import {
   AdditiveBlending,
   BackSide,
   Color,
+  DoubleSide,
   type Group,
   type Mesh,
   type MeshStandardMaterial,
@@ -25,6 +26,7 @@ type BlockProps = {
   size: number
   surfaceMap: Texture
   cityLightsMap: Texture
+  hasRing?: boolean
   hot?: boolean
 }
 
@@ -40,6 +42,7 @@ export function Block({
   recency,
   size,
   surfaceMap,
+  hasRing = false,
   hot = false,
 }: BlockProps) {
   const groupRef = useRef<Group>(null)
@@ -162,7 +165,7 @@ export function Block({
       ref={groupRef}
     >
       <mesh ref={coreRef}>
-        <sphereGeometry args={[size, 48, 48]} />
+        <sphereGeometry args={[size, 32, 32]} />
         <meshStandardMaterial
           color={coreColor}
           emissive={glowColor}
@@ -174,8 +177,8 @@ export function Block({
           ref={materialRef}
         />
       </mesh>
-      <mesh scale={hot ? 1.055 : 1.045}>
-        <sphereGeometry args={[size, 48, 48]} />
+      <mesh scale={hot ? 1.02 : 1.016}>
+        <sphereGeometry args={[size, 32, 32]} />
         <meshBasicMaterial
           alphaTest={0.02}
           side={BackSide}
@@ -183,9 +186,22 @@ export function Block({
           color={atmosphereColor}
           depthWrite={false}
           transparent
-          opacity={hot ? 0.22 : 0.14}
+          opacity={hot ? 0.07 : 0.04}
         />
       </mesh>
+      {hasRing && (
+        <mesh rotation={[Math.PI * 0.58, 0.22, Math.PI * 0.08]}>
+          <ringGeometry args={[size * 1.24, size * 1.92, 64]} />
+          <meshBasicMaterial
+            blending={AdditiveBlending}
+            color={atmosphereColor}
+            depthWrite={false}
+            opacity={0.18}
+            side={DoubleSide}
+            transparent
+          />
+        </mesh>
+      )}
     </group>
   )
 }

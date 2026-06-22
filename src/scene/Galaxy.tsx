@@ -1,36 +1,34 @@
 import { OrbitControls, Stars } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import {
-  Bloom,
-  BrightnessContrast,
-  DepthOfField,
-  EffectComposer,
-  HueSaturation,
-  ToneMapping,
-  Vignette,
-} from '@react-three/postprocessing'
 import gsap from 'gsap'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ElementRef } from 'react'
-import { ACESFilmicToneMapping, AdditiveBlending, Group, Vector3 } from 'three'
-import { BlendFunction, ToneMappingMode } from 'postprocessing'
+import {
+  ACESFilmicToneMapping,
+  AdditiveBlending,
+  BufferGeometry,
+  Group,
+  Vector3,
+} from 'three'
 import type { ActivityCategory, ChainBlock, DataSource } from '../data/solana'
 import { useSolanaBlocks } from '../data/solana'
 import { Block } from './Block'
-import { ChainPath } from './ChainPath'
-import {
-  blockPlacements,
-  createInnerChainCurve,
-  createOuterChainCurve,
-} from './chainCurves'
-import { Particles } from './Particles'
+import { blockPlacements } from './chainCurves'
 import { createPlanetTextureSet } from './textures'
 
 type SceneBlock = ChainBlock & {
-  chain: 'inner' | 'outer'
   color: string
   id: number
-  progress: number
+  orbit: OrbitSpec
+}
+
+type OrbitSpec = {
+  radiusX: number
+  radiusZ: number
+  angle: number
+  speed: number
+  tilt: number
+  y: number
 }
 
 const categoryColors: Record<ActivityCategory, string> = {
@@ -55,22 +53,10 @@ const activityCategories: ActivityCategory[] = ['defi', 'token', 'nft', 'other']
 
 const visualPolish = {
   bloom: {
-    intensity: 1.08,
+    intensity: 1.05,
     luminanceSmoothing: 0.16,
-    luminanceThreshold: 0.48,
+    luminanceThreshold: 0.66,
     radius: 0.52,
-  },
-  colorGrade: {
-    contrast: 0.035,
-    saturation: 0.075,
-    vignetteDarkness: 0.32,
-    vignetteOffset: 0.2,
-  },
-  depthOfField: {
-    bokehScale: 1.35,
-    focalLength: 0.034,
-    focusRange: 0.02,
-    resolutionScale: 0.74,
   },
   float: {
     x: 0.075,
@@ -80,7 +66,7 @@ const visualPolish = {
 }
 
 function getDefaultCameraPosition(isNarrow: boolean) {
-  return new Vector3(0, isNarrow ? 2.85 : 2.35, isNarrow ? 13.4 : 9.2)
+  return new Vector3(0, isNarrow ? 5.8 : 5.05, isNarrow ? 16.2 : 13.2)
 }
 
 function usePrefersReducedMotion() {
@@ -97,6 +83,25 @@ function usePrefersReducedMotion() {
   }, [])
 
   return prefersReducedMotion
+}
+
+function createOrbitSpecs(count: number): OrbitSpec[] {
+  const firstRadius = 1.65
+  const gap = 0.68
+
+  return Array.from({ length: count }, (_, index) => {
+    const radius = firstRadius + index * gap
+    const progress = count <= 1 ? 0 : index / (count - 1)
+
+    return {
+      angle: index * 1.74 + 0.35,
+      radiusX: radius * (1.02 + Math.sin(index * 1.2) * 0.045),
+      radiusZ: radius * (0.72 + Math.cos(index * 0.92) * 0.055),
+      speed: 0.145 - progress * 0.09,
+      tilt: -0.22 + Math.sin(index * 0.82) * 0.16,
+      y: (index % 3 - 1) * 0.055,
+    }
+  })
 }
 
 function BlockchainScene({
@@ -121,12 +126,9 @@ function BlockchainScene({
   const { camera, size } = useThree()
   const isNarrow = size.width < 640
   const baseGroupPosition = useMemo(
-    () => new Vector3(0, isNarrow ? -0.95 : -0.15, 0),
+    () => new Vector3(0, isNarrow ? -0.72 : -0.2, 0),
     [isNarrow],
   )
-  const [dofTarget, setDofTarget] = useState(() => new Vector3(0.85, 0.05, -0.15))
-  const innerCurve = useMemo(() => createInnerChainCurve(), [])
-  const outerCurve = useMemo(() => createOuterChainCurve(), [])
   const planetTextures = useMemo(
     () => ({
       defi: createPlanetTextureSet('defi'),
@@ -136,19 +138,6 @@ function BlockchainScene({
     }),
     [],
   )
-  const blockPositions = useMemo(
-    () =>
-      blockPlacements.map((block) =>
-        block.chain === 'inner'
-          ? innerCurve.getPointAt(block.progress)
-          : outerCurve.getPointAt(block.progress),
-      ),
-    [innerCurve, outerCurve],
-  )
-  const sunPosition = useMemo(() => {
-    const headPosition = blockPositions[blockPositions.length - 1]
-    return headPosition.clone().add(new Vector3(0.82, 0.92, 4.05))
-  }, [blockPositions])
 
   const flyCamera = useCallback(
     (position: Vector3, target: Vector3, duration = 1.32) => {
@@ -198,11 +187,10 @@ function BlockchainScene({
       const cameraDirection = camera.position.clone().sub(worldPosition).normalize()
       const focusPosition = worldPosition
         .clone()
-        .add(cameraDirection.multiplyScalar(isNarrow ? 4.2 : 3.25))
+        .add(cameraDirection.multiplyScalar(isNarrow ? 5.2 : 4.6))
         .add(new Vector3(0, isNarrow ? 0.42 : 0.28, 0))
 
       setSelectedBlockId(id)
-      setDofTarget(target)
       flyCamera(focusPosition, target)
     },
     [blocks, camera.position, flyCamera, isNarrow, setSelectedBlockId],
@@ -210,7 +198,6 @@ function BlockchainScene({
 
   const handleDeselect = useCallback(() => {
     setSelectedBlockId(null)
-    setDofTarget(new Vector3(0.85, 0.05, -0.15))
     flyCamera(getDefaultCameraPosition(isNarrow), new Vector3(0, 0, 0), 1.24)
 
     if (resumeRotationRef.current) {
@@ -248,13 +235,12 @@ function BlockchainScene({
     }
   }, [])
 
-  useFrame(({ clock }, delta) => {
+  useFrame(({ clock }) => {
     if (!galaxyRef.current) {
       return
     }
 
     if (selectedBlockId === null && !resumeDelayActive) {
-      galaxyRef.current.rotation.y += delta * 0.075
       galaxyRef.current.rotation.x = prefersReducedMotion
         ? 0
         : Math.sin(clock.elapsedTime * 0.16) * 0.035
@@ -276,12 +262,12 @@ function BlockchainScene({
   return (
     <>
       <color attach="background" args={['#070d22']} />
-      <fog attach="fog" args={['#070d22', 8, 19]} />
-      <ambientLight color="#8aa6d4" intensity={0.14} />
+      <fog attach="fog" args={['#070d22', 12, 28]} />
+      <ambientLight color="#6b7fa8" intensity={0.028} />
       <Stars
-        radius={80}
-        depth={44}
-        count={2800}
+        radius={110}
+        depth={60}
+        count={1900}
         factor={4.2}
         saturation={0.35}
         fade
@@ -292,91 +278,146 @@ function BlockchainScene({
         position={baseGroupPosition}
         scale={isNarrow ? 0.72 : 1}
       >
-        <Sun position={sunPosition} />
-        <ChainPath />
-        <Particles />
+        <Sun />
+        {blocks.map((block) => (
+          <OrbitLine key={`orbit-${block.id}`} orbit={block.orbit} />
+        ))}
         {blocks.map((block, index) => {
           const textures = planetTextures[block.dominantCategory]
 
           return (
-            <Block
-              categoryColor={block.color}
+            <OrbitingPlanet
+              block={block}
               cityLightsMap={textures.cityLightsMap}
-              failedTxRatio={block.failedTxRatio}
-              hot={block.recency === 1}
+              isMotionPaused={selectedBlockId !== null || prefersReducedMotion}
               id={index}
               isSelected={selectedBlockId === index}
               key={index}
               onHoverChange={onHoverBlock}
               onSelect={handleSelectBlock}
-              position={blockPositions[index]}
-              recency={block.recency}
-              size={block.size}
               surfaceMap={textures.surfaceMap}
             />
           )
         })}
       </group>
-      <EffectComposer>
-        <DepthOfField
-          bokehScale={visualPolish.depthOfField.bokehScale}
-          focalLength={visualPolish.depthOfField.focalLength}
-          focusRange={visualPolish.depthOfField.focusRange}
-          resolutionScale={visualPolish.depthOfField.resolutionScale}
-          target={dofTarget}
-        />
-        <Bloom
-          intensity={visualPolish.bloom.intensity}
-          luminanceSmoothing={visualPolish.bloom.luminanceSmoothing}
-          luminanceThreshold={visualPolish.bloom.luminanceThreshold}
-          mipmapBlur
-          radius={visualPolish.bloom.radius}
-        />
-        <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-        <BrightnessContrast
-          blendFunction={BlendFunction.NORMAL}
-          brightness={0}
-          contrast={visualPolish.colorGrade.contrast}
-        />
-        <HueSaturation
-          blendFunction={BlendFunction.NORMAL}
-          hue={0}
-          saturation={visualPolish.colorGrade.saturation}
-        />
-        <Vignette
-          darkness={visualPolish.colorGrade.vignetteDarkness}
-          offset={visualPolish.colorGrade.vignetteOffset}
-        />
-      </EffectComposer>
       <OrbitControls
-        autoRotate={selectedBlockId === null && !resumeDelayActive}
-        autoRotateSpeed={0.36}
+        autoRotate={false}
         dampingFactor={0.06}
         enableDamping
         enablePan={false}
-        maxDistance={13}
-        minDistance={5.5}
+        maxDistance={20}
+        minDistance={4.8}
         ref={controlsRef}
       />
     </>
   )
 }
 
-function Sun({ position }: { position: Vector3 }) {
+function OrbitingPlanet({
+  block,
+  cityLightsMap,
+  id,
+  isMotionPaused,
+  isSelected,
+  onHoverChange,
+  onSelect,
+  surfaceMap,
+}: {
+  block: SceneBlock
+  cityLightsMap: ReturnType<typeof createPlanetTextureSet>['cityLightsMap']
+  id: number
+  isMotionPaused: boolean
+  isSelected: boolean
+  onHoverChange: (isHovering: boolean) => void
+  onSelect: (id: number, position: Vector3) => void
+  surfaceMap: ReturnType<typeof createPlanetTextureSet>['surfaceMap']
+}) {
+  const groupRef = useRef<Group>(null)
+  const localOrigin = useMemo(() => new Vector3(0, 0, 0), [])
+  const angleRef = useRef(block.orbit.angle)
+
+  useFrame(({ clock }, delta) => {
+    const group = groupRef.current
+
+    if (!group) {
+      return
+    }
+
+    if (!isMotionPaused) {
+      angleRef.current += delta * block.orbit.speed
+    }
+
+    const angle = angleRef.current
+    const orbitSin = Math.sin(angle)
+    group.position.set(
+      Math.cos(angle) * block.orbit.radiusX,
+      block.orbit.y + orbitSin * Math.sin(block.orbit.tilt) * block.orbit.radiusZ,
+      orbitSin * block.orbit.radiusZ,
+    )
+
+    if (!isMotionPaused) {
+      group.rotation.y += 0.006 + block.recency * 0.005
+      group.rotation.z = Math.sin(clock.elapsedTime * 0.2 + id) * 0.035
+    }
+  })
+
   return (
-    <group position={position}>
-      <pointLight color="#fff4c6" decay={1.12} distance={19} intensity={165} />
+    <group ref={groupRef}>
+      <Block
+        categoryColor={block.color}
+        cityLightsMap={cityLightsMap}
+        failedTxRatio={block.failedTxRatio}
+        hasRing={block.dominantCategory === 'defi'}
+        hot={block.recency === 1}
+        id={id}
+        isSelected={isSelected}
+        onHoverChange={onHoverChange}
+        onSelect={onSelect}
+        position={localOrigin}
+        recency={block.recency}
+        size={block.size}
+        surfaceMap={surfaceMap}
+      />
+    </group>
+  )
+}
+
+function OrbitLine({ orbit }: { orbit: OrbitSpec }) {
+  const geometry = useMemo(() => {
+    const points = Array.from({ length: 128 }, (_, index) => {
+      const angle = (index / 128) * Math.PI * 2
+      return new Vector3(
+        Math.cos(angle) * orbit.radiusX,
+        orbit.y + Math.sin(angle) * Math.sin(orbit.tilt) * orbit.radiusZ,
+        Math.sin(angle) * orbit.radiusZ,
+      )
+    })
+
+    return new BufferGeometry().setFromPoints(points)
+  }, [orbit])
+
+  return (
+    <lineLoop geometry={geometry}>
+      <lineBasicMaterial color="#7891bb" opacity={0.18} transparent />
+    </lineLoop>
+  )
+}
+
+function Sun() {
+  return (
+    <group>
+      <pointLight color="#fff4c6" decay={1.25} distance={24} intensity={285} />
       <mesh>
-        <sphereGeometry args={[0.36, 48, 48]} />
-        <meshBasicMaterial color="#fff1a8" toneMapped={false} />
+        <sphereGeometry args={[0.78, 48, 48]} />
+        <meshBasicMaterial color="#fff2b6" toneMapped={false} />
       </mesh>
-      <mesh scale={1.7}>
-        <sphereGeometry args={[0.36, 48, 48]} />
+      <mesh scale={1.72}>
+        <sphereGeometry args={[0.78, 40, 40]} />
         <meshBasicMaterial
           blending={AdditiveBlending}
           color="#ffb347"
           depthWrite={false}
-          opacity={0.2}
+          opacity={0.22}
           toneMapped={false}
           transparent
         />
@@ -388,21 +429,23 @@ function Sun({ position }: { position: Vector3 }) {
 export function Galaxy() {
   const chainData = useSolanaBlocks(blockPlacements.length)
   const prefersReducedMotion = usePrefersReducedMotion()
+  const orbitSpecs = useMemo(
+    () => createOrbitSpecs(chainData.blocks.length),
+    [chainData.blocks.length],
+  )
   const blocks = useMemo<SceneBlock[]>(
     () =>
       chainData.blocks.map((block, index) => {
-        const placement = blockPlacements[index]
         const color = categoryColors[block.dominantCategory]
 
         return {
           ...block,
-          chain: placement.chain,
           color,
           id: index,
-          progress: placement.progress,
+          orbit: orbitSpecs[index],
         }
       }),
-    [chainData.blocks],
+    [chainData.blocks, orbitSpecs],
   )
   const [selectedBlockId, setSelectedBlockId] = useState<number | null>(null)
   const [deselectSignal, setDeselectSignal] = useState(0)
@@ -415,14 +458,14 @@ export function Galaxy() {
     <main className="galaxy-shell">
       <div className="galaxy-title" aria-hidden="true">
         <h1>Blockchain Galaxy</h1>
-        <p>A glowing Solana chain drifting through a bloom-lit starfield.</p>
+        <p>Recent Solana blocks orbiting a live-data sun.</p>
       </div>
       {showLegend && <CategoryLegend onDismiss={() => setShowLegend(false)} />}
       <InfoPanel selectedBlock={selectedBlock} source={chainData.source} />
       <Canvas
         camera={{ position: [0, 2.35, 9.2], fov: 48 }}
         className={`galaxy-canvas ${isHoveringBlock ? 'is-hovering-block' : ''}`}
-        dpr={[1, 1.25]}
+        dpr={0.85}
         gl={{ antialias: true, toneMapping: ACESFilmicToneMapping }}
         onPointerMissed={() => setDeselectSignal((signal) => signal + 1)}
       >
