@@ -12,7 +12,7 @@ import {
 import gsap from 'gsap'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ElementRef } from 'react'
-import { ACESFilmicToneMapping, Group, Vector3 } from 'three'
+import { ACESFilmicToneMapping, AdditiveBlending, Group, Vector3 } from 'three'
 import { BlendFunction, ToneMappingMode } from 'postprocessing'
 import type { ActivityCategory, ChainBlock, DataSource } from '../data/solana'
 import { useSolanaBlocks } from '../data/solana'
@@ -24,7 +24,7 @@ import {
   createOuterChainCurve,
 } from './chainCurves'
 import { Particles } from './Particles'
-import { createCircuitTexture } from './textures'
+import { createPlanetTextureSet } from './textures'
 
 type SceneBlock = ChainBlock & {
   chain: 'inner' | 'outer'
@@ -45,14 +45,20 @@ const categoryLabels: Record<ActivityCategory, string> = {
   nft: 'NFT',
   other: 'Other',
 }
+const worldTypeLabels: Record<ActivityCategory, string> = {
+  defi: 'Gas giant = DeFi',
+  token: 'Ocean = Token',
+  nft: 'Verdant = NFT',
+  other: 'Rocky = Other',
+}
 const activityCategories: ActivityCategory[] = ['defi', 'token', 'nft', 'other']
 
 const visualPolish = {
   bloom: {
-    intensity: 1.42,
+    intensity: 1.08,
     luminanceSmoothing: 0.16,
-    luminanceThreshold: 0.26,
-    radius: 0.68,
+    luminanceThreshold: 0.48,
+    radius: 0.52,
   },
   colorGrade: {
     contrast: 0.035,
@@ -121,7 +127,15 @@ function BlockchainScene({
   const [dofTarget, setDofTarget] = useState(() => new Vector3(0.85, 0.05, -0.15))
   const innerCurve = useMemo(() => createInnerChainCurve(), [])
   const outerCurve = useMemo(() => createOuterChainCurve(), [])
-  const circuitMap = useMemo(() => createCircuitTexture(), [])
+  const planetTextures = useMemo(
+    () => ({
+      defi: createPlanetTextureSet('defi'),
+      token: createPlanetTextureSet('token'),
+      nft: createPlanetTextureSet('nft'),
+      other: createPlanetTextureSet('other'),
+    }),
+    [],
+  )
   const blockPositions = useMemo(
     () =>
       blockPlacements.map((block) =>
@@ -131,6 +145,10 @@ function BlockchainScene({
       ),
     [innerCurve, outerCurve],
   )
+  const sunPosition = useMemo(() => {
+    const headPosition = blockPositions[blockPositions.length - 1]
+    return headPosition.clone().add(new Vector3(0.82, 0.92, 4.05))
+  }, [blockPositions])
 
   const flyCamera = useCallback(
     (position: Vector3, target: Vector3, duration = 1.32) => {
@@ -259,9 +277,7 @@ function BlockchainScene({
     <>
       <color attach="background" args={['#070d22']} />
       <fog attach="fog" args={['#070d22', 8, 19]} />
-      <ambientLight intensity={0.16} />
-      <pointLight color="#8b4dff" intensity={22} position={[-4, 3, 5]} />
-      <pointLight color="#25f7e8" intensity={12} position={[4, -2, 3]} />
+      <ambientLight color="#8aa6d4" intensity={0.14} />
       <Stars
         radius={80}
         depth={44}
@@ -276,24 +292,30 @@ function BlockchainScene({
         position={baseGroupPosition}
         scale={isNarrow ? 0.72 : 1}
       >
+        <Sun position={sunPosition} />
         <ChainPath />
         <Particles />
-        {blocks.map((block, index) => (
-          <Block
-            categoryColor={block.color}
-            circuitMap={circuitMap}
-            failedTxRatio={block.failedTxRatio}
-            hot={block.recency === 1}
-            id={index}
-            isSelected={selectedBlockId === index}
-            key={index}
-            onHoverChange={onHoverBlock}
-            onSelect={handleSelectBlock}
-            position={blockPositions[index]}
-            recency={block.recency}
-            size={block.size}
-          />
-        ))}
+        {blocks.map((block, index) => {
+          const textures = planetTextures[block.dominantCategory]
+
+          return (
+            <Block
+              categoryColor={block.color}
+              cityLightsMap={textures.cityLightsMap}
+              failedTxRatio={block.failedTxRatio}
+              hot={block.recency === 1}
+              id={index}
+              isSelected={selectedBlockId === index}
+              key={index}
+              onHoverChange={onHoverBlock}
+              onSelect={handleSelectBlock}
+              position={blockPositions[index]}
+              recency={block.recency}
+              size={block.size}
+              surfaceMap={textures.surfaceMap}
+            />
+          )
+        })}
       </group>
       <EffectComposer>
         <DepthOfField
@@ -340,6 +362,29 @@ function BlockchainScene({
   )
 }
 
+function Sun({ position }: { position: Vector3 }) {
+  return (
+    <group position={position}>
+      <pointLight color="#fff4c6" decay={1.12} distance={19} intensity={165} />
+      <mesh>
+        <sphereGeometry args={[0.36, 48, 48]} />
+        <meshBasicMaterial color="#fff1a8" toneMapped={false} />
+      </mesh>
+      <mesh scale={1.7}>
+        <sphereGeometry args={[0.36, 48, 48]} />
+        <meshBasicMaterial
+          blending={AdditiveBlending}
+          color="#ffb347"
+          depthWrite={false}
+          opacity={0.2}
+          toneMapped={false}
+          transparent
+        />
+      </mesh>
+    </group>
+  )
+}
+
 export function Galaxy() {
   const chainData = useSolanaBlocks(blockPlacements.length)
   const prefersReducedMotion = usePrefersReducedMotion()
@@ -377,7 +422,7 @@ export function Galaxy() {
       <Canvas
         camera={{ position: [0, 2.35, 9.2], fov: 48 }}
         className={`galaxy-canvas ${isHoveringBlock ? 'is-hovering-block' : ''}`}
-        dpr={[1, 2]}
+        dpr={[1, 1.25]}
         gl={{ antialias: true, toneMapping: ACESFilmicToneMapping }}
         onPointerMissed={() => setDeselectSignal((signal) => signal + 1)}
       >
@@ -414,7 +459,7 @@ function CategoryLegend({ onDismiss }: { onDismiss: () => void }) {
               className="category-legend__swatch"
               style={{ '--category-color': categoryColors[category] } as CSSProperties}
             />
-            {categoryLabels[category]}
+            {worldTypeLabels[category]}
           </li>
         ))}
       </ul>

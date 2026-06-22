@@ -64,14 +64,14 @@ export function ChainPath() {
         <meshStandardMaterial
           color="#ffffff"
           emissive="#6f32db"
-          emissiveIntensity={0.9}
+          emissiveIntensity={0.42}
           emissiveMap={textures.emissiveMap}
           metalness={0.2}
           normalMap={textures.normalMap}
           normalScale={[0.18, 0.18]}
           roughness={0.42}
           transparent
-          opacity={0.78}
+          opacity={0.68}
           vertexColors
         />
       </mesh>
@@ -79,14 +79,14 @@ export function ChainPath() {
         <meshStandardMaterial
           color="#ffffff"
           emissive="#42ffee"
-          emissiveIntensity={1.35}
+          emissiveIntensity={0.62}
           emissiveMap={textures.emissiveMap}
           metalness={0.18}
           normalMap={textures.normalMap}
           normalScale={[0.22, 0.22]}
           roughness={0.34}
           transparent
-          opacity={0.9}
+          opacity={0.78}
           vertexColors
         />
       </mesh>
@@ -96,7 +96,7 @@ export function ChainPath() {
           color={teal}
           depthWrite={false}
           transparent
-          opacity={0.18}
+          opacity={0.1}
           vertexColors
         />
       </mesh>

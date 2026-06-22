@@ -4,6 +4,7 @@ import gsap from 'gsap'
 import { useEffect, useMemo, useRef } from 'react'
 import {
   AdditiveBlending,
+  BackSide,
   Color,
   type Group,
   type Mesh,
@@ -14,7 +15,6 @@ import {
 
 type BlockProps = {
   categoryColor: string
-  circuitMap: Texture
   failedTxRatio: number
   id: number
   isSelected: boolean
@@ -23,12 +23,14 @@ type BlockProps = {
   position: Vector3
   recency: number
   size: number
+  surfaceMap: Texture
+  cityLightsMap: Texture
   hot?: boolean
 }
 
 export function Block({
   categoryColor,
-  circuitMap,
+  cityLightsMap,
   failedTxRatio,
   id,
   isSelected,
@@ -37,18 +39,23 @@ export function Block({
   position,
   recency,
   size,
+  surfaceMap,
   hot = false,
 }: BlockProps) {
   const groupRef = useRef<Group>(null)
   const coreRef = useRef<Mesh>(null)
   const materialRef = useRef<MeshStandardMaterial>(null)
-  const baseEmissiveIntensity = hot ? 5.9 : 1.35 + recency * 2.25
+  const baseEmissiveIntensity = hot ? 0.055 : 0.006 + recency * 0.018
   const targetEmissiveIntensityRef = useRef(baseEmissiveIntensity)
   const coreColor = useMemo(() => {
-    const color = new Color(categoryColor).lerp(new Color('#ffffff'), 0.12)
-    return hot ? color.lerp(new Color('#f3fffb'), 0.42) : color
+    const color = new Color('#ffffff').lerp(new Color(categoryColor), 0.18)
+    return hot ? color.lerp(new Color('#fff4d7'), 0.1) : color
   }, [categoryColor, hot])
   const glowColor = useMemo(() => new Color(categoryColor), [categoryColor])
+  const atmosphereColor = useMemo(
+    () => new Color(categoryColor).lerp(new Color('#ffffff'), hot ? 0.22 : 0.06),
+    [categoryColor, hot],
+  )
 
   useEffect(() => {
     const group = groupRef.current
@@ -66,7 +73,7 @@ export function Block({
       z: isSelected ? 1.15 : 1,
     })
     targetEmissiveIntensityRef.current = isSelected
-      ? baseEmissiveIntensity * 1.45
+      ? baseEmissiveIntensity * 1.8
       : baseEmissiveIntensity
     gsap.to(material, {
       duration: 0.24,
@@ -100,7 +107,7 @@ export function Block({
       return
     }
 
-    targetEmissiveIntensityRef.current = baseEmissiveIntensity * 1.55
+    targetEmissiveIntensityRef.current = baseEmissiveIntensity * 2.4
     gsap.to(groupRef.current.scale, {
       duration: 0.22,
       ease: 'power2.out',
@@ -160,20 +167,23 @@ export function Block({
           color={coreColor}
           emissive={glowColor}
           emissiveIntensity={baseEmissiveIntensity}
-          emissiveMap={circuitMap}
-          roughness={0.25}
-          metalness={0.08}
+          emissiveMap={cityLightsMap}
+          map={surfaceMap}
+          roughness={hot ? 0.42 : 0.62}
+          metalness={0.02}
           ref={materialRef}
         />
       </mesh>
-      <mesh scale={hot ? 1.72 : 1.45}>
+      <mesh scale={hot ? 1.055 : 1.045}>
         <sphereGeometry args={[size, 48, 48]} />
         <meshBasicMaterial
+          alphaTest={0.02}
+          side={BackSide}
           blending={AdditiveBlending}
-          color={glowColor}
+          color={atmosphereColor}
           depthWrite={false}
           transparent
-          opacity={hot ? 0.24 : 0.13}
+          opacity={hot ? 0.22 : 0.14}
         />
       </mesh>
     </group>

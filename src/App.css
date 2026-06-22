@@ -49,7 +49,7 @@
   left: clamp(20px, 5vw, 64px);
   bottom: clamp(18px, 4vw, 40px);
   z-index: 3;
-  width: 154px;
+  width: 204px;
   padding: 12px 13px 13px;
   border: 1px solid rgba(126, 234, 255, 0.34);
   border-radius: 8px;
@@ -99,7 +99,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.25;
 }
 
 .category-legend__swatch {
