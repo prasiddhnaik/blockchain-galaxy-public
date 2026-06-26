@@ -107,19 +107,34 @@ export type PlanetVariant =
   | 'orca'
   | 'jupiter'
   | 'phoenix'
+  | 'pump-fun'
+  | 'meteora'
+  | 'openbook'
+  | 'serum'
   | 'defi-generic'
+  | 'defi-ice'
+  | 'defi-nebula'
+  | 'defi-storm'
   | 'spl-token'
   | 'token-2022'
   | 'system'
   | 'token-generic'
+  | 'token-aqua'
+  | 'token-cloud'
+  | 'token-deep'
   | 'magic-eden'
   | 'tensor'
   | 'metaplex'
   | 'nft-generic'
+  | 'verdant-emerald'
+  | 'verdant-lime'
+  | 'verdant-moss'
   | 'other-generic'
   | 'rocky-red'
   | 'rocky-grey'
   | 'rocky-cratered'
+  | 'rocky-ice'
+  | 'rocky-iron'
 
 const planetPalettes: Record<
   PlanetKind,
@@ -189,9 +204,16 @@ function drawGasGiant(
     ({
     'defi-generic': { bandScale: 1, stormSize: 0, swirl: 0.72, tint: '#9b3fff' },
     jupiter: { bandScale: 0.72, stormSize: 1, swirl: 1.08, tint: '#6a20ff' },
+    meteora: { bandScale: 1.86, stormSize: 0.18, swirl: 1.34, tint: '#b349ff' },
     orca: { bandScale: 1.42, stormSize: 0.34, swirl: 0.42, tint: '#5748ff' },
+    openbook: { bandScale: 0.66, stormSize: 0, swirl: 0.5, tint: '#8758ff' },
     phoenix: { bandScale: 0.92, stormSize: 0, swirl: 0.86, tint: '#e13dcb' },
+    'pump-fun': { bandScale: 1.7, stormSize: 0.62, swirl: 1.65, tint: '#ff4dc4' },
     raydium: { bandScale: 1.08, stormSize: 0.28, swirl: 0.92, tint: '#c26fff' },
+    serum: { bandScale: 0.52, stormSize: 0.16, swirl: 0.38, tint: '#4f2dce' },
+    'defi-ice': { bandScale: 1.24, stormSize: 0, swirl: 0.36, tint: '#97a8ff' },
+    'defi-nebula': { bandScale: 0.84, stormSize: 0.72, swirl: 1.45, tint: '#cf7cff' },
+    'defi-storm': { bandScale: 1.52, stormSize: 0.48, swirl: 1.22, tint: '#8b2dff' },
   } as Partial<
     Record<
       PlanetVariant,
@@ -261,6 +283,9 @@ function drawOceanWorld(
     ({
     system: { base: '#1295ff', accent: '#e8fffb', clouds: 0.38 },
     'spl-token': { base: '#00d6e7', accent: '#d7fffb', clouds: 0.62 },
+    'token-aqua': { base: '#00ffe1', accent: '#f2fffb', clouds: 0.74 },
+    'token-cloud': { base: '#45c8ff', accent: '#ffffff', clouds: 0.92 },
+    'token-deep': { base: '#156dff', accent: '#73f7ff', clouds: 0.28 },
     'token-2022': { base: '#009cff', accent: '#7affff', clouds: 0.46 },
     'token-generic': { base: palette.base, accent: palette.accent, clouds: 0.54 },
   } as Partial<
@@ -319,6 +344,9 @@ function drawVerdantWorld(
       metaplex: { cloudCount: 18, marbling: 0.018, tint: '#bcff42' },
       'nft-generic': { cloudCount: 24, marbling: 0.025, tint: palette.accent },
       tensor: { cloudCount: 12, marbling: 0.034, tint: '#2cff90' },
+      'verdant-emerald': { cloudCount: 18, marbling: 0.03, tint: '#00f0a2' },
+      'verdant-lime': { cloudCount: 28, marbling: 0.019, tint: '#d4ff5f' },
+      'verdant-moss': { cloudCount: 10, marbling: 0.04, tint: '#69b86f' },
     } as Partial<
       Record<PlanetVariant, { cloudCount: number; marbling: number; tint: string }>
     >)[variant] ?? { cloudCount: 24, marbling: 0.025, tint: palette.accent }
@@ -371,7 +399,11 @@ function drawRockyWorld(
         ? '#d85c38'
         : variant === 'rocky-cratered'
           ? '#ff8b42'
-          : '#e35a2e'
+          : variant === 'rocky-ice'
+            ? '#d3e1ff'
+            : variant === 'rocky-iron'
+              ? '#a13d32'
+              : '#e35a2e'
   const craterCount =
     variant === 'rocky-cratered'
       ? 64
@@ -379,7 +411,11 @@ function drawRockyWorld(
         ? 38
         : variant === 'rocky-grey'
           ? 46
-          : 34
+          : variant === 'rocky-ice'
+            ? 28
+            : variant === 'rocky-iron'
+              ? 54
+              : 34
 
   context.fillStyle = mixedColor(palette.dark, rockyBase, 0.62)
   context.fillRect(0, 0, size, size)

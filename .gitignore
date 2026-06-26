@@ -15,6 +15,8 @@ dist-ssr
 .env
 .env.*
 !.env.example
+handoff-report.html
+site-*.json
 
 # Editor directories and files
 .vscode/*

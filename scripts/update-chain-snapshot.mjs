@@ -26,6 +26,7 @@ const CATEGORY_PROGRAMS = {
     'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',
     // Raydium
     '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
+    'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK',
     'CAMMCzo5YL8w4VFF8KVHrK22GGUQpVTaW7grrKgrWqK',
     'CPMMoo8L3F4NbTegBCKVNwbryeYbJ4YF9t4r5gn1s9y',
     '5quBtoiQqxF9J9tYNNQDPqBrVgbGpxRFNZbQeTeM2UZa',
@@ -74,12 +75,15 @@ const CATEGORY_PROGRAMS = {
   vote: new Set(['Vote111111111111111111111111111111111111111']),
 }
 const ACTIVITY_PRIORITY = ['defi', 'nft', 'token', 'other']
+const ROLLUP_EXCLUDED_CATEGORIES = new Set(['infra', 'vote'])
+const TOP_PROGRAM_COUNT = 15
 const PROGRAM_LABELS = new Map([
   ['JUP2jxvS5ji3Yj2hfRCKW3tnL3hq6h3JNsxFYgNn3n9', 'Jupiter'],
   ['JUP3c2Uhhu0g8Q6NDtY9CgzGbSadtWSJbAQGtD2q7SU', 'Jupiter'],
   ['JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', 'Jupiter'],
   ['JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', 'Jupiter'],
   ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', 'Raydium'],
+  ['CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', 'Raydium'],
   ['CAMMCzo5YL8w4VFF8KVHrK22GGUQpVTaW7grrKgrWqK', 'Raydium'],
   ['CPMMoo8L3F4NbTegBCKVNwbryeYbJ4YF9t4r5gn1s9y', 'Raydium'],
   ['5quBtoiQqxF9J9tYNNQDPqBrVgbGpxRFNZbQeTeM2UZa', 'Raydium'],
@@ -220,6 +224,59 @@ function getInnerInstructions(transactionWithMeta) {
   )
 }
 
+function classifyTransactionPrograms(transactionWithMeta) {
+  const accountKeys = getTransactionAccountKeys(transactionWithMeta)
+  const instructions = [
+    ...getTopLevelInstructions(transactionWithMeta),
+    ...getInnerInstructions(transactionWithMeta),
+  ]
+  const transactionCategoryCounts = cloneProgramCounts()
+  const programIds = instructions
+    .map((instruction) => getInstructionProgramId(instruction, accountKeys))
+    .filter((programId) => programId !== undefined)
+
+  for (const programId of programIds) {
+    const category = categorizeProgram(programId)
+    transactionCategoryCounts[category] += 1
+  }
+
+  const selectedActivityCategory = ACTIVITY_PRIORITY.find(
+    (category) => transactionCategoryCounts[category] > 0,
+  )
+
+  if (selectedActivityCategory) {
+    return {
+      category: selectedActivityCategory,
+      programId: programIds.find(
+        (programId) => categorizeProgram(programId) === selectedActivityCategory,
+      ),
+      transactionCategoryCounts,
+    }
+  }
+
+  if (transactionCategoryCounts.vote > 0) {
+    return {
+      category: 'vote',
+      programId: programIds.find((programId) => categorizeProgram(programId) === 'vote'),
+      transactionCategoryCounts,
+    }
+  }
+
+  if (transactionCategoryCounts.infra > 0) {
+    return {
+      category: 'infra',
+      programId: programIds.find((programId) => categorizeProgram(programId) === 'infra'),
+      transactionCategoryCounts,
+    }
+  }
+
+  return {
+    category: 'other',
+    programId: programIds[0],
+    transactionCategoryCounts,
+  }
+}
+
 function categorizeProgram(programId) {
   if (!programId) {
     return 'other'
@@ -234,56 +291,41 @@ function categorizeProgram(programId) {
   return 'other'
 }
 
-function summarizeProgramComposition(block) {
+function summarizeProgramComposition(block, programRollup) {
   const programCounts = cloneProgramCounts()
   const selectedProgramHits = new Map()
   let failedTransactions = 0
 
   for (const transactionWithMeta of block.transactions) {
-    const accountKeys = getTransactionAccountKeys(transactionWithMeta)
-    const instructions = [
-      ...getTopLevelInstructions(transactionWithMeta),
-      ...getInnerInstructions(transactionWithMeta),
-    ]
-
     if (transactionWithMeta.meta?.err) {
       failedTransactions += 1
     }
 
-    const transactionCategoryCounts = cloneProgramCounts()
+    const selectedProgram = classifyTransactionPrograms(transactionWithMeta)
 
-    for (const instruction of instructions) {
-      const programId = getInstructionProgramId(instruction, accountKeys)
-      const category = categorizeProgram(programId)
-      transactionCategoryCounts[category] += 1
-    }
+    if (ACTIVITY_PRIORITY.includes(selectedProgram.category)) {
+      programCounts[selectedProgram.category] += 1
 
-    const selectedActivityCategory = ACTIVITY_PRIORITY.find(
-      (category) => transactionCategoryCounts[category] > 0,
-    )
-
-    if (selectedActivityCategory) {
-      programCounts[selectedActivityCategory] += 1
-      const selectedProgramId = instructions
-        .map((instruction) =>
-          getInstructionProgramId(instruction, accountKeys),
-        )
-        .find(
-          (programId) =>
-            categorizeProgram(programId) === selectedActivityCategory,
-        )
-
-      if (selectedProgramId) {
+      if (selectedProgram.programId) {
         const label =
-          PROGRAM_LABELS.get(selectedProgramId) ?? selectedProgramId
+          PROGRAM_LABELS.get(selectedProgram.programId) ?? selectedProgram.programId
         selectedProgramHits.set(
           label,
           (selectedProgramHits.get(label) ?? 0) + 1,
         )
+
+        if (!ROLLUP_EXCLUDED_CATEGORIES.has(selectedProgram.category)) {
+          addProgramRollupHit(
+            programRollup,
+            selectedProgram.programId,
+            selectedProgram.category,
+            block.slot,
+          )
+        }
       }
-    } else if (transactionCategoryCounts.vote > 0) {
+    } else if (selectedProgram.category === 'vote') {
       programCounts.vote += 1
-    } else if (transactionCategoryCounts.infra > 0) {
+    } else if (selectedProgram.category === 'infra') {
       programCounts.infra += 1
     } else {
       programCounts.other += 1
@@ -326,6 +368,55 @@ function summarizeProgramComposition(block) {
   }
 }
 
+function addProgramRollupHit(programRollup, programId, category, slot) {
+  if (!programId || ROLLUP_EXCLUDED_CATEGORIES.has(category)) {
+    return
+  }
+
+  const existingProgram = programRollup.get(programId) ?? {
+    appearedInSlots: new Set(),
+    category,
+    name: PROGRAM_LABELS.get(programId) ?? null,
+    programId,
+    slotCounts: new Map(),
+    totalTxns: 0,
+  }
+
+  existingProgram.totalTxns += 1
+  existingProgram.appearedInSlots.add(slot)
+  existingProgram.slotCounts.set(
+    slot,
+    (existingProgram.slotCounts.get(slot) ?? 0) + 1,
+  )
+  programRollup.set(programId, existingProgram)
+}
+
+function buildProgramRollup(programRollup) {
+  const programs = [...programRollup.values()]
+    .map((program) => ({
+      programId: program.programId,
+      name: program.name,
+      category: program.category,
+      totalTxns: program.totalTxns,
+      blockCount: program.appearedInSlots.size,
+      appearedInSlots: [...program.appearedInSlots].sort((slotA, slotB) => slotA - slotB),
+      slotCounts: Object.fromEntries(
+        [...program.slotCounts.entries()].sort(
+          ([slotA], [slotB]) => slotA - slotB,
+        ),
+      ),
+    }))
+    .sort((programA, programB) => programB.totalTxns - programA.totalTxns)
+  const topPrograms = programs
+    .filter((program) => program.name !== null)
+    .slice(0, TOP_PROGRAM_COUNT)
+
+  return {
+    programs,
+    topPrograms,
+  }
+}
+
 const startedAt = Date.now()
 const rpcUrl = await getHeliusRpcUrl()
 const connection = new Connection(rpcUrl, 'confirmed')
@@ -341,6 +432,7 @@ const slots = await withRateLimitRetry('getBlocks', () =>
 )
 const recentSlots = slots.slice(-BLOCK_COUNT)
 const blocks = []
+const programRollup = new Map()
 
 for (let index = 0; index < recentSlots.length; index += BLOCK_BATCH_SIZE) {
   const slotBatch = recentSlots.slice(index, index + BLOCK_BATCH_SIZE)
@@ -362,7 +454,7 @@ for (let index = 0; index < recentSlots.length; index += BLOCK_BATCH_SIZE) {
         blockTime: block.blockTime,
         slot,
         transactions: block.transactions.length,
-        ...summarizeProgramComposition(block),
+        ...summarizeProgramComposition({ ...block, slot }, programRollup),
       }
     }),
   )
@@ -386,14 +478,26 @@ console.log(
   `Fetched ${blocks.length} blocks from Helius in ${elapsedSeconds}s using batches of ${BLOCK_BATCH_SIZE}.`,
 )
 
+const { programs, topPrograms } = buildProgramRollup(programRollup)
 const snapshot = {
   generatedAt: new Date().toISOString(),
   network: 'solana-mainnet-beta',
   rpcUrl: REDACTED_RPC_URL,
   blocks,
+  programs,
+  topPrograms,
 }
 const outputPath = resolve('src/data/chain-snapshot.json')
 
 await writeFile(`${outputPath}.tmp`, `${JSON.stringify(snapshot, null, 2)}\n`)
 await rename(`${outputPath}.tmp`, outputPath)
 console.log(`Wrote ${snapshot.blocks.length} blocks to ${outputPath}`)
+console.log(`Program rollup: ${programs.length} programs, ${programs.filter((program) => program.name !== null).length} named.`)
+console.table(
+  topPrograms.map(({ name, category, totalTxns, blockCount }) => ({
+    name,
+    category,
+    totalTxns,
+    blockCount,
+  })),
+)

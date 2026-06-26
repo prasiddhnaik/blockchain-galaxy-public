@@ -164,6 +164,10 @@ export function Block({
       position={position}
       ref={groupRef}
     >
+      <mesh>
+        <sphereGeometry args={[size * 2.65, 16, 16]} />
+        <meshBasicMaterial depthWrite={false} opacity={0} transparent />
+      </mesh>
       <mesh ref={coreRef}>
         <sphereGeometry args={[size, 48, 48]} />
         <meshStandardMaterial

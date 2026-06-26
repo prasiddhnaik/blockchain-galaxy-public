@@ -1,25 +1,58 @@
-import { OrbitControls, Stars } from '@react-three/drei'
+import { OrbitControls, Stars, Text } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import gsap from 'gsap'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ElementRef } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type { CSSProperties, ElementRef, FormEvent, RefObject } from 'react'
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
   BufferGeometry,
+  CanvasTexture,
   Group,
+  LinearFilter,
+  MeshBasicMaterial,
+  RepeatWrapping,
   Vector3,
 } from 'three'
-import type { ActivityCategory, ChainBlock, DataSource } from '../data/solana'
-import { useSolanaBlocks } from '../data/solana'
+import type {
+  ActivityCategory,
+  CategoryMix,
+  ChainBlock,
+  DataSource,
+  ProgramActivityResult,
+  ProgramCounts,
+  ProgramRollup,
+} from '../data/solana'
+import {
+  fetchProgramActivity,
+  getCachedBlockBySlot,
+  getCachedProgramRollup,
+  getKnownProgramMetadata,
+  useSolanaBlocks,
+} from '../data/solana'
 import { Block } from './Block'
 import { createPlanetTextureSet } from './textures'
 import type { PlanetVariant } from './textures'
 
-type SceneBlock = ChainBlock & {
+type ScenePlanet = {
+  block?: ChainBlock
   color: string
+  failedTxRatio: number
+  hot: boolean
   id: number
   orbit: OrbitSpec
+  program?: ProgramRollup
+  recency: number
+  size: number
+  title: string
+  category: ActivityCategory
   variant: PlanetVariant
 }
 
@@ -31,6 +64,9 @@ type OrbitSpec = {
   tilt: number
   y: number
 }
+
+type ActiveScene = 'ecosystem' | 'destination'
+type WarpDirection = 'to-destination' | 'to-ecosystem'
 
 const categoryColors: Record<ActivityCategory, string> = {
   defi: '#9b3fff',
@@ -52,36 +88,93 @@ const worldTypeLabels: Record<ActivityCategory, string> = {
 }
 const activityCategories: ActivityCategory[] = ['defi', 'token', 'nft', 'other']
 const sunRadius = 0.78
-const sunGlowRadius = sunRadius * 1.48
-const sunClearanceMargin = sunRadius * 1.85
-const orbitSurfaceMargin = sunRadius * 0.38
+const sunGlowRadiusRatio = 1.48
+const sunClearanceMarginRatio = 1.85
+const orbitSurfaceMarginRatio = 0.38
 const orbitZAspect = 0.88
+const destinationSunActivityScale = {
+  maxRadius: 1.24,
+  maxTxns: 650,
+  minRadius: 0.68,
+  minTxns: 1,
+  type: 'log',
+} as const
 const defaultVisibleBlockCount = 30
+const minProgramPlanetRadius = 0.28
+const maxProgramPlanetRadius = 0.62
+const defaultSearchPlaceholder = 'Search program or paste program ID'
+const warpDurationMs = 6200
+const reducedMotionWarpDurationMs = 520
 
 const variantFallbacks: Record<ActivityCategory, PlanetVariant[]> = {
-  defi: ['defi-generic'],
-  token: ['token-generic'],
-  nft: ['nft-generic'],
-  other: ['other-generic'],
+  defi: ['defi-generic', 'defi-storm', 'defi-ice', 'defi-nebula'],
+  token: ['token-generic', 'token-aqua', 'token-cloud', 'token-deep'],
+  nft: ['nft-generic', 'verdant-emerald', 'verdant-lime', 'verdant-moss'],
+  other: ['other-generic', 'rocky-cratered', 'rocky-ice', 'rocky-iron'],
 }
+
+const knownProgramAliases = new Map([
+  ['JUP2jxvS5ji3Yj2hfRCKW3tnL3hq6h3JNsxFYgNn3n9', 'Jupiter'],
+  ['JUP3c2Uhhu0g8Q6NDtY9CgzGbSadtWSJbAQGtD2q7SU', 'Jupiter'],
+  ['JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', 'Jupiter'],
+  ['JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', 'Jupiter'],
+  ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', 'Pump.fun'],
+  ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', 'Raydium'],
+  ['CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', 'Raydium'],
+  ['CAMMCzo5YL8w4VFF8KVHrK22GGUQpVTaW7grrKgrWqK', 'Raydium'],
+  ['CPMMoo8L3F4NbTegBCKVNwbryeYbJ4YF9t4r5gn1s9y', 'Raydium'],
+  ['5quBtoiQqxF9J9tYNNQDPqBrVgbGpxRFNZbQeTeM2UZa', 'Raydium'],
+  ['cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG', 'Pump.fun'],
+  ['Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', 'Meteora'],
+  ['LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', 'Meteora'],
+  ['opnb2LAfJYbCnR3Z6BhQGbn2zfgPioEFrB37LdkP7gj', 'OpenBook'],
+  ['pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA', 'Pump.fun'],
+  ['whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', 'Orca'],
+  ['9W959DqEETiGZocYWCQPaJ6nK9joxTywcxSUGWNA3Y3r', 'Orca'],
+  ['9xQeWvG816bUx9EPf7W6WMAaQ2X5rJjZA8tE7Rj1U4q', 'Serum'],
+  ['PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY', 'Phoenix'],
+  ['srmqPvymJeFKQ4XrEN2o33bJ87fdLhRZSF6tJkQKzJr', 'OpenBook'],
+  ['11111111111111111111111111111111', 'System'],
+  ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'SPL Token'],
+  ['TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', 'Token-2022'],
+  ['M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K', 'Magic Eden'],
+  ['TCMPhJdwDryooaGtiocG1u3xcYbRpiJzb283XfCZsDp', 'Tensor'],
+  ['TAMM6ub33ij1mbetoMyVBLeKY5iP41i4UPUJQGkhfsg', 'Tensor'],
+  ['metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s', 'Metaplex'],
+])
 
 const variantSpin: Record<PlanetVariant, number> = {
   'defi-generic': 0.92,
+  'defi-ice': 0.66,
+  'defi-nebula': 1.16,
+  'defi-storm': 1.3,
   jupiter: 0.72,
+  meteora: 1.1,
   orca: 0.58,
+  openbook: 0.82,
   phoenix: 1.08,
+  'pump-fun': 1.38,
   raydium: 1.18,
+  serum: 0.76,
   system: 0.7,
   'spl-token': 1.02,
+  'token-aqua': 1.16,
+  'token-cloud': 0.82,
+  'token-deep': 0.68,
   'token-2022': 1.26,
   'token-generic': 0.94,
   'magic-eden': 0.88,
   metaplex: 0.78,
   'nft-generic': 0.96,
   tensor: 1.22,
+  'verdant-emerald': 1.06,
+  'verdant-lime': 0.92,
+  'verdant-moss': 0.7,
   'other-generic': 0.74,
   'rocky-cratered': 0.62,
   'rocky-grey': 0.68,
+  'rocky-ice': 0.58,
+  'rocky-iron': 0.86,
   'rocky-red': 0.82,
 }
 
@@ -124,6 +217,18 @@ function getInitialFocusBlockId() {
   return Number.isInteger(focusBlockId) && focusBlockId >= 0 ? focusBlockId : null
 }
 
+function getInitialFocusProgramId() {
+  const rawFocusProgramId = new URLSearchParams(window.location.search).get('focusProgram')
+  if (rawFocusProgramId === null) {
+    return null
+  }
+
+  const focusProgramId = Number(rawFocusProgramId)
+  return Number.isInteger(focusProgramId) && focusProgramId >= 0
+    ? focusProgramId
+    : null
+}
+
 function usePrefersReducedMotion() {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
 
@@ -140,53 +245,124 @@ function usePrefersReducedMotion() {
   return prefersReducedMotion
 }
 
-function resolvePlanetVariant(block: ChainBlock, index: number): PlanetVariant {
-  const programName = block.dominantProgram?.toLowerCase() ?? ''
+function resolvePlanetVariantFromProgram(
+  category: ActivityCategory,
+  programName: string | null | undefined,
+  index: number,
+): PlanetVariant {
+  const normalizedProgramName =
+    knownProgramAliases.get(programName ?? '')?.toLowerCase() ??
+    programName?.toLowerCase() ??
+    ''
 
-  if (block.dominantCategory === 'defi') {
-    if (programName.includes('raydium')) return 'raydium'
-    if (programName.includes('orca')) return 'orca'
-    if (programName.includes('jupiter')) return 'jupiter'
-    if (programName.includes('phoenix')) return 'phoenix'
+  if (category === 'defi') {
+    if (normalizedProgramName.includes('pump')) return 'pump-fun'
+    if (normalizedProgramName.includes('meteora')) return 'meteora'
+    if (normalizedProgramName.includes('openbook')) return 'openbook'
+    if (normalizedProgramName.includes('raydium')) return 'raydium'
+    if (normalizedProgramName.includes('orca')) return 'orca'
+    if (normalizedProgramName.includes('jupiter')) return 'jupiter'
+    if (normalizedProgramName.includes('phoenix')) return 'phoenix'
+    if (normalizedProgramName.includes('serum')) return 'serum'
   }
 
-  if (block.dominantCategory === 'token') {
-    if (programName.includes('token-2022')) return 'token-2022'
-    if (programName.includes('system')) return 'system'
-    if (programName.includes('spl') || programName.includes('token')) return 'spl-token'
+  if (category === 'token') {
+    if (normalizedProgramName.includes('token-2022')) return 'token-2022'
+    if (normalizedProgramName.includes('system')) return 'system'
+    if (
+      normalizedProgramName.includes('spl') ||
+      normalizedProgramName.includes('token')
+    ) {
+      return 'spl-token'
+    }
   }
 
-  if (block.dominantCategory === 'nft') {
-    if (programName.includes('magic')) return 'magic-eden'
-    if (programName.includes('tensor')) return 'tensor'
-    if (programName.includes('metaplex')) return 'metaplex'
+  if (category === 'nft') {
+    if (normalizedProgramName.includes('magic')) return 'magic-eden'
+    if (normalizedProgramName.includes('tensor')) return 'tensor'
+    if (normalizedProgramName.includes('metaplex')) return 'metaplex'
   }
 
-  if (block.dominantCategory === 'other') {
-    if (programName.includes('system')) return 'rocky-grey'
-    if (programName.includes('memo')) return 'rocky-red'
-    if (programName) return 'rocky-cratered'
+  if (category === 'other') {
+    if (normalizedProgramName.includes('system')) return 'rocky-grey'
+    if (normalizedProgramName.includes('memo')) return 'rocky-red'
+    if (normalizedProgramName) return 'rocky-cratered'
   }
 
-  const fallbacks = variantFallbacks[block.dominantCategory]
+  const fallbacks = variantFallbacks[category]
   return fallbacks[index % fallbacks.length]
 }
 
-function createOrbitSpecs(blocks: ChainBlock[]): OrbitSpec[] {
-  const startingAngles = [1.12, 2.62, 0.42, 3.14, 0.88, 2.08, 0.08, 1.62]
-  const maxPlanetRadius = Math.max(...blocks.map((block) => block.size), 0.3)
-  let currentRadius =
-    (sunGlowRadius + maxPlanetRadius + sunClearanceMargin) / orbitZAspect
+function resolvePlanetVariant(block: ChainBlock, index: number): PlanetVariant {
+  return resolvePlanetVariantFromProgram(
+    block.dominantCategory,
+    block.dominantProgram,
+    index,
+  )
+}
 
-  return blocks.map((block, index) => {
+function getDestinationSunRadius(activityMagnitude: number) {
+  const clampedTxns = Math.min(
+    destinationSunActivityScale.maxTxns,
+    Math.max(destinationSunActivityScale.minTxns, activityMagnitude),
+  )
+  const minValue = Math.log1p(destinationSunActivityScale.minTxns)
+  const maxValue = Math.log1p(destinationSunActivityScale.maxTxns)
+  const scaledValue =
+    destinationSunActivityScale.type === 'log'
+      ? Math.log1p(clampedTxns)
+      : Math.sqrt(clampedTxns)
+  const scaledMin =
+    destinationSunActivityScale.type === 'log'
+      ? minValue
+      : Math.sqrt(destinationSunActivityScale.minTxns)
+  const scaledMax =
+    destinationSunActivityScale.type === 'log'
+      ? maxValue
+      : Math.sqrt(destinationSunActivityScale.maxTxns)
+  const activityWeight = (scaledValue - scaledMin) / Math.max(1, scaledMax - scaledMin)
+  const radius =
+    destinationSunActivityScale.minRadius +
+    activityWeight *
+      (destinationSunActivityScale.maxRadius - destinationSunActivityScale.minRadius)
+
+  return Number(radius.toFixed(3))
+}
+
+function getDestinationActivityMagnitude(
+  activityResult: ProgramActivityResult | null,
+  program: ProgramRollup | null,
+) {
+  if (activityResult && activityResult.programId === program?.programId) {
+    return activityResult.totalTxns
+  }
+
+  return program?.totalTxns ?? 0
+}
+
+function createOrbitSpecs(
+  planets: Pick<ScenePlanet, 'size'>[],
+  centerSunRadius = sunRadius,
+): OrbitSpec[] {
+  const startingAngles = [1.12, 2.62, 0.42, 3.14, 0.88, 2.08, 0.08, 1.62]
+  const maxPlanetRadius = Math.max(...planets.map((planet) => planet.size), 0.3)
+  const centerSunGlowRadius = centerSunRadius * sunGlowRadiusRatio
+  const centerSunClearanceMargin = centerSunRadius * sunClearanceMarginRatio
+  const centerOrbitSurfaceMargin = centerSunRadius * orbitSurfaceMarginRatio
+  let currentRadius =
+    (centerSunGlowRadius + maxPlanetRadius + centerSunClearanceMargin) /
+    orbitZAspect
+
+  return planets.map((planet, index) => {
     if (index > 0) {
-      const previousRadius = blocks[index - 1].size
-      const currentPlanetRadius = block.size
+      const previousRadius = planets[index - 1].size
+      const currentPlanetRadius = planet.size
       currentRadius +=
-        (previousRadius + currentPlanetRadius + orbitSurfaceMargin) / orbitZAspect
+        (previousRadius + currentPlanetRadius + centerOrbitSurfaceMargin) /
+        orbitZAspect
     }
 
-    const progress = blocks.length <= 1 ? 0 : index / (blocks.length - 1)
+    const progress = planets.length <= 1 ? 0 : index / (planets.length - 1)
 
     return {
       angle: startingAngles[index % startingAngles.length],
@@ -209,21 +385,31 @@ function getOrbitPosition(orbit: OrbitSpec, angle: number) {
 }
 
 function BlockchainScene({
-  blocks,
+  planets,
   deselectSignal,
+  emptyMessage,
   initialFocusBlockId,
   onHoverBlock,
   prefersReducedMotion,
   selectedBlockId,
   setSelectedBlockId,
+  sunColor = '#ffb347',
+  sunLabel = 'Solana Mainnet',
+  sunRadius: sceneSunRadius = sunRadius,
+  sunSubLabel,
 }: {
-  blocks: SceneBlock[]
+  planets: ScenePlanet[]
   deselectSignal: number
+  emptyMessage?: string
   initialFocusBlockId: number | null
   onHoverBlock: (isHovering: boolean) => void
   prefersReducedMotion: boolean
   selectedBlockId: number | null
   setSelectedBlockId: (id: number | null) => void
+  sunColor?: string
+  sunLabel?: string
+  sunRadius?: number
+  sunSubLabel?: string
 }) {
   const galaxyRef = useRef<Group>(null)
   const controlsRef = useRef<ElementRef<typeof OrbitControls>>(null)
@@ -238,30 +424,48 @@ function BlockchainScene({
   const maxOrbitRadius = useMemo(
     () =>
       Math.max(
-        ...blocks.map((block) => Math.max(block.orbit.radiusX, block.orbit.radiusZ)),
+        ...planets.map((planet) =>
+          Math.max(planet.orbit.radiusX, planet.orbit.radiusZ),
+        ),
+        sceneSunRadius * sunGlowRadiusRatio * 2.4,
         1,
       ),
-    [blocks],
+    [planets, sceneSunRadius],
   )
   const systemScale = getSystemScale(isNarrow, maxOrbitRadius)
   const planetTextures = useMemo(
     () => ({
       'defi-generic': createPlanetTextureSet('defi', 'defi-generic'),
+      'defi-ice': createPlanetTextureSet('defi', 'defi-ice'),
+      'defi-nebula': createPlanetTextureSet('defi', 'defi-nebula'),
+      'defi-storm': createPlanetTextureSet('defi', 'defi-storm'),
       jupiter: createPlanetTextureSet('defi', 'jupiter'),
+      meteora: createPlanetTextureSet('defi', 'meteora'),
       orca: createPlanetTextureSet('defi', 'orca'),
+      openbook: createPlanetTextureSet('defi', 'openbook'),
       phoenix: createPlanetTextureSet('defi', 'phoenix'),
+      'pump-fun': createPlanetTextureSet('defi', 'pump-fun'),
       raydium: createPlanetTextureSet('defi', 'raydium'),
+      serum: createPlanetTextureSet('defi', 'serum'),
       system: createPlanetTextureSet('token', 'system'),
       'spl-token': createPlanetTextureSet('token', 'spl-token'),
+      'token-aqua': createPlanetTextureSet('token', 'token-aqua'),
+      'token-cloud': createPlanetTextureSet('token', 'token-cloud'),
+      'token-deep': createPlanetTextureSet('token', 'token-deep'),
       'token-2022': createPlanetTextureSet('token', 'token-2022'),
       'token-generic': createPlanetTextureSet('token', 'token-generic'),
       'magic-eden': createPlanetTextureSet('nft', 'magic-eden'),
       metaplex: createPlanetTextureSet('nft', 'metaplex'),
       'nft-generic': createPlanetTextureSet('nft', 'nft-generic'),
       tensor: createPlanetTextureSet('nft', 'tensor'),
+      'verdant-emerald': createPlanetTextureSet('nft', 'verdant-emerald'),
+      'verdant-lime': createPlanetTextureSet('nft', 'verdant-lime'),
+      'verdant-moss': createPlanetTextureSet('nft', 'verdant-moss'),
       'other-generic': createPlanetTextureSet('other', 'other-generic'),
       'rocky-cratered': createPlanetTextureSet('other', 'rocky-cratered'),
       'rocky-grey': createPlanetTextureSet('other', 'rocky-grey'),
+      'rocky-ice': createPlanetTextureSet('other', 'rocky-ice'),
+      'rocky-iron': createPlanetTextureSet('other', 'rocky-iron'),
       'rocky-red': createPlanetTextureSet('other', 'rocky-red'),
     }),
     [],
@@ -305,9 +509,9 @@ function BlockchainScene({
       }
       setResumeDelayActive(false)
 
-      const block = blocks[id]
+      const planet = planets[id]
 
-      if (!block) {
+      if (!planet) {
         return
       }
 
@@ -321,7 +525,7 @@ function BlockchainScene({
       setSelectedBlockId(id)
       flyCamera(focusPosition, target)
     },
-    [blocks, camera.position, flyCamera, isNarrow, setSelectedBlockId],
+    [planets, camera.position, flyCamera, isNarrow, setSelectedBlockId],
   )
 
   const handleDeselect = useCallback(() => {
@@ -418,19 +622,63 @@ function BlockchainScene({
         position={baseGroupPosition}
         scale={systemScale}
       >
-        <Sun />
-        {blocks.map((block) => (
-          <OrbitLine key={`orbit-${block.id}`} orbit={block.orbit} />
+        <Sun color={sunColor} radius={sceneSunRadius} />
+        <Text
+          anchorX="center"
+          anchorY="middle"
+          color="#fff8cf"
+          fontSize={0.22}
+          outlineBlur={0.04}
+          outlineColor={sunColor}
+          outlineOpacity={0.32}
+          position={[0, sceneSunRadius * 1.72, 0]}
+        >
+          {sunLabel}
+        </Text>
+        {sunSubLabel && (
+          <Text
+            anchorX="center"
+            anchorY="middle"
+            color="#b9d7ff"
+            fontSize={0.13}
+            outlineBlur={0.025}
+            outlineColor="#000000"
+            outlineOpacity={0.24}
+            position={[0, sceneSunRadius * 1.36, 0]}
+          >
+            {sunSubLabel}
+          </Text>
+        )}
+        {planets.length === 0 && emptyMessage && (
+          <Text
+            anchorX="center"
+            anchorY="middle"
+            color="#d9ebff"
+            fontSize={0.16}
+            maxWidth={3.4}
+            outlineBlur={0.03}
+            outlineColor="#000000"
+            outlineOpacity={0.3}
+            position={[0, -sceneSunRadius * 1.36, 0]}
+            textAlign="center"
+          >
+            {emptyMessage}
+          </Text>
+        )}
+        {planets.map((planet) => (
+          <OrbitLine key={`orbit-${planet.id}`} orbit={planet.orbit} />
         ))}
-        {blocks.map((block, index) => {
-          const textures = planetTextures[block.variant]
+        {planets.map((planet, index) => {
+          const textures = planetTextures[planet.variant]
 
           return (
             <OrbitingPlanet
-              block={block}
+              planet={planet}
               cityLightsMap={textures.cityLightsMap}
               initialFocusBlockId={initialFocusBlockId}
-              isMotionPaused={selectedBlockId !== null || prefersReducedMotion}
+              isMotionPaused={
+                selectedBlockId !== null || prefersReducedMotion
+              }
               id={index}
               isSelected={selectedBlockId === index}
               key={index}
@@ -455,7 +703,7 @@ function BlockchainScene({
 }
 
 function OrbitingPlanet({
-  block,
+  planet,
   cityLightsMap,
   id,
   initialFocusBlockId,
@@ -465,7 +713,7 @@ function OrbitingPlanet({
   onSelect,
   surfaceMap,
 }: {
-  block: SceneBlock
+  planet: ScenePlanet
   cityLightsMap: ReturnType<typeof createPlanetTextureSet>['cityLightsMap']
   id: number
   initialFocusBlockId: number | null
@@ -478,7 +726,7 @@ function OrbitingPlanet({
   const groupRef = useRef<Group>(null)
   const hasAutoFocusedRef = useRef(false)
   const localOrigin = useMemo(() => new Vector3(0, 0, 0), [])
-  const angleRef = useRef(block.orbit.angle)
+  const angleRef = useRef(planet.orbit.angle)
 
   useEffect(() => {
     if (
@@ -490,14 +738,14 @@ function OrbitingPlanet({
     }
 
     const timeoutId = window.setTimeout(() => {
-      const worldPosition = getOrbitPosition(block.orbit, angleRef.current)
+      const worldPosition = getOrbitPosition(planet.orbit, angleRef.current)
       groupRef.current?.parent?.localToWorld(worldPosition)
       hasAutoFocusedRef.current = true
       onSelect(id, worldPosition)
     }, 260)
 
     return () => window.clearTimeout(timeoutId)
-  }, [block.orbit, id, initialFocusBlockId, onSelect])
+  }, [planet.orbit, id, initialFocusBlockId, onSelect])
 
   useFrame(({ clock }, delta) => {
     const group = groupRef.current
@@ -507,14 +755,15 @@ function OrbitingPlanet({
     }
 
     if (!isMotionPaused) {
-      angleRef.current += delta * block.orbit.speed
+      angleRef.current += delta * planet.orbit.speed
     }
 
     const angle = angleRef.current
-    group.position.copy(getOrbitPosition(block.orbit, angle))
+    group.position.copy(getOrbitPosition(planet.orbit, angle))
 
     if (!isMotionPaused) {
-      group.rotation.y += (0.0055 + block.recency * 0.0035) * variantSpin[block.variant]
+      group.rotation.y +=
+        (0.0055 + planet.recency * 0.0035) * variantSpin[planet.variant]
       group.rotation.z = Math.sin(clock.elapsedTime * 0.2 + id) * 0.035
     }
   })
@@ -522,18 +771,18 @@ function OrbitingPlanet({
   return (
     <group ref={groupRef}>
       <Block
-        categoryColor={block.color}
+        categoryColor={planet.color}
         cityLightsMap={cityLightsMap}
-        failedTxRatio={block.failedTxRatio}
-        hasRing={block.dominantCategory === 'defi' && block.size >= 0.44}
-        hot={block.recency === 1}
+        failedTxRatio={planet.failedTxRatio}
+        hasRing={planet.category === 'defi' && planet.size >= 0.44}
+        hot={planet.hot}
         id={id}
         isSelected={isSelected}
         onHoverChange={onHoverChange}
         onSelect={onSelect}
         position={localOrigin}
-        recency={block.recency}
-        size={block.size}
+        recency={planet.recency}
+        size={planet.size}
         surfaceMap={surfaceMap}
       />
     </group>
@@ -561,30 +810,423 @@ function OrbitLine({ orbit }: { orbit: OrbitSpec }) {
   )
 }
 
-function Sun() {
+function createSolarGranulationTexture() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 384
+  canvas.height = 192
+  const context = canvas.getContext('2d')
+
+  if (!context) {
+    throw new Error('Canvas 2D context is unavailable.')
+  }
+
+  const baseGradient = context.createLinearGradient(0, 0, canvas.width, canvas.height)
+  baseGradient.addColorStop(0, '#fff4a8')
+  baseGradient.addColorStop(0.34, '#ffbd55')
+  baseGradient.addColorStop(0.68, '#ff7b32')
+  baseGradient.addColorStop(1, '#df472c')
+  context.fillStyle = baseGradient
+  context.fillRect(0, 0, canvas.width, canvas.height)
+
+  for (let y = -12; y < canvas.height + 24; y += 16) {
+    for (let x = -12; x < canvas.width + 24; x += 18) {
+      const noise = Math.sin(x * 0.13 + y * 0.19) + Math.cos(x * 0.09 - y * 0.21)
+      const radius = 6 + Math.abs(noise) * 4
+      const granule = context.createRadialGradient(x, y, 0, x, y, radius)
+
+      granule.addColorStop(0, noise > 0 ? 'rgb(255 255 215 / 0.42)' : 'rgb(255 92 38 / 0.3)')
+      granule.addColorStop(0.58, noise > 0 ? 'rgb(255 191 77 / 0.24)' : 'rgb(185 46 33 / 0.28)')
+      granule.addColorStop(1, 'rgb(54 8 12 / 0)')
+      context.fillStyle = granule
+      context.beginPath()
+      context.arc(x, y, radius, 0, Math.PI * 2)
+      context.fill()
+    }
+  }
+
+  context.globalCompositeOperation = 'screen'
+  context.lineWidth = 2.2
+  context.lineCap = 'round'
+
+  for (let index = 0; index < 26; index += 1) {
+    const y = 18 + ((index * 37) % canvas.height)
+    const amplitude = 5 + (index % 5) * 1.8
+
+    context.beginPath()
+    for (let x = 0; x <= canvas.width; x += 8) {
+      const waveY =
+        y +
+        Math.sin(x * 0.036 + index * 1.7) * amplitude +
+        Math.sin(x * 0.083 + index) * 2
+
+      if (x === 0) {
+        context.moveTo(x, waveY)
+      } else {
+        context.lineTo(x, waveY)
+      }
+    }
+    context.strokeStyle =
+      index % 3 === 0 ? 'rgb(255 250 185 / 0.28)' : 'rgb(255 115 54 / 0.18)'
+    context.stroke()
+  }
+
+  context.globalCompositeOperation = 'multiply'
+  context.fillStyle = 'rgb(118 20 24 / 0.16)'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+
+  const texture = new CanvasTexture(canvas)
+  texture.wrapS = RepeatWrapping
+  texture.wrapT = RepeatWrapping
+  texture.repeat.set(1.55, 1.12)
+  texture.magFilter = LinearFilter
+  texture.minFilter = LinearFilter
+  texture.needsUpdate = true
+
+  return texture
+}
+
+function Sun({
+  color = '#ffb347',
+  radius = sunRadius,
+}: {
+  color?: string
+  radius?: number
+}) {
+  const surfaceRef = useRef<Group>(null)
+  const flareOneRef = useRef<Group>(null)
+  const flareTwoRef = useRef<Group>(null)
+  const flareThreeRef = useRef<Group>(null)
+  const coronaRef = useRef<Group>(null)
+  const hotShellMaterialRef = useRef<MeshBasicMaterial>(null)
+  const innerCoronaMaterialRef = useRef<MeshBasicMaterial>(null)
+  const outerCoronaMaterialRef = useRef<MeshBasicMaterial>(null)
+  const flareOneMaterialRef = useRef<MeshBasicMaterial>(null)
+  const flareTwoMaterialRef = useRef<MeshBasicMaterial>(null)
+  const flareThreeMaterialRef = useRef<MeshBasicMaterial>(null)
+  const surfaceMap = useMemo(() => createSolarGranulationTexture(), [])
+
+  useFrame(({ clock }) => {
+    const elapsed = clock.elapsedTime
+
+    if (surfaceRef.current) {
+      const convectionPulse =
+        1 + Math.sin(elapsed * 1.6) * 0.006 + Math.sin(elapsed * 2.7) * 0.004
+
+      surfaceRef.current.rotation.y = elapsed * 0.105
+      surfaceRef.current.rotation.x = Math.sin(elapsed * 0.22) * 0.025
+      surfaceRef.current.rotation.z = Math.sin(elapsed * 0.34) * 0.035
+      surfaceRef.current.scale.setScalar(convectionPulse)
+    }
+
+    if (hotShellMaterialRef.current) {
+      hotShellMaterialRef.current.opacity =
+        0.16 + Math.sin(elapsed * 2.9) * 0.028 + Math.sin(elapsed * 5.1) * 0.014
+    }
+
+    if (flareOneRef.current) {
+      const flareScale = 1 + Math.sin(elapsed * 1.8) * 0.08
+
+      flareOneRef.current.rotation.z = elapsed * 0.18
+      flareOneRef.current.rotation.y = Math.sin(elapsed * 0.44) * 0.16
+      flareOneRef.current.scale.set(1.16 * flareScale, 0.64, 1)
+    }
+
+    if (flareTwoRef.current) {
+      const flareScale = 1 + Math.sin(elapsed * 1.35 + 1.7) * 0.1
+
+      flareTwoRef.current.rotation.z = -elapsed * 0.13
+      flareTwoRef.current.rotation.x = Math.sin(elapsed * 0.39 + 0.8) * 0.13
+      flareTwoRef.current.scale.set(0.76, 1.24 * flareScale, 1)
+    }
+
+    if (flareThreeRef.current) {
+      const flareScale = 1 + Math.sin(elapsed * 1.1 + 2.4) * 0.12
+
+      flareThreeRef.current.rotation.z = elapsed * 0.11
+      flareThreeRef.current.rotation.y = Math.sin(elapsed * 0.31 + 1.2) * 0.18
+      flareThreeRef.current.scale.set(1.28 * flareScale, 0.78, 1)
+    }
+
+    if (flareOneMaterialRef.current) {
+      flareOneMaterialRef.current.opacity = 0.46 + Math.sin(elapsed * 3.4) * 0.12
+    }
+
+    if (flareTwoMaterialRef.current) {
+      flareTwoMaterialRef.current.opacity = 0.32 + Math.sin(elapsed * 2.8 + 1.1) * 0.1
+    }
+
+    if (flareThreeMaterialRef.current) {
+      flareThreeMaterialRef.current.opacity = 0.18 + Math.sin(elapsed * 2.1 + 2.2) * 0.07
+    }
+
+    if (coronaRef.current) {
+      const pulse =
+        1 + Math.sin(elapsed * 1.15) * 0.028 + Math.sin(elapsed * 2.35) * 0.01
+      coronaRef.current.scale.setScalar(pulse)
+      coronaRef.current.rotation.z = -elapsed * 0.055
+    }
+
+    if (innerCoronaMaterialRef.current) {
+      innerCoronaMaterialRef.current.opacity = 0.1 + Math.sin(elapsed * 1.7) * 0.026
+    }
+
+    if (outerCoronaMaterialRef.current) {
+      outerCoronaMaterialRef.current.opacity = 0.045 + Math.sin(elapsed * 1.15 + 0.7) * 0.014
+    }
+  })
+
   return (
     <group>
-      <pointLight color="#fff4c6" decay={1.25} distance={24} intensity={285} />
-      <mesh>
-        <sphereGeometry args={[0.78, 48, 48]} />
-        <meshBasicMaterial color="#fff2b6" toneMapped={false} />
-      </mesh>
-      <mesh scale={1.48}>
-        <sphereGeometry args={[0.78, 40, 40]} />
-        <meshBasicMaterial
-          blending={AdditiveBlending}
-          color="#ffb347"
-          depthWrite={false}
-          opacity={0.13}
-          toneMapped={false}
-          transparent
-        />
-      </mesh>
+      <pointLight color="#fff0ba" decay={1.22} distance={26} intensity={300} />
+      <group ref={surfaceRef}>
+        <mesh>
+          <sphereGeometry args={[radius, 72, 72]} />
+          <meshBasicMaterial
+            color="#fff0b2"
+            map={surfaceMap}
+            toneMapped={false}
+          />
+        </mesh>
+        <mesh scale={1.015}>
+          <sphereGeometry args={[radius, 72, 72]} />
+          <meshBasicMaterial
+            ref={hotShellMaterialRef}
+            blending={AdditiveBlending}
+            color="#ff6b32"
+            depthWrite={false}
+            opacity={0.18}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+      <group ref={flareOneRef} rotation={[0.72, 0.18, -0.28]}>
+        <mesh>
+          <torusGeometry args={[radius * 1.08, 0.012, 8, 96, Math.PI * 1.18]} />
+          <meshBasicMaterial
+            ref={flareOneMaterialRef}
+            blending={AdditiveBlending}
+            color="#ff8d3d"
+            depthWrite={false}
+            opacity={0.58}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+      <group ref={flareTwoRef} rotation={[-0.42, 0.48, 1.9]}>
+        <mesh>
+          <torusGeometry args={[radius * 1.2, 0.009, 8, 96, Math.PI * 0.82]} />
+          <meshBasicMaterial
+            ref={flareTwoMaterialRef}
+            blending={AdditiveBlending}
+            color="#ffd46a"
+            depthWrite={false}
+            opacity={0.4}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+      <group ref={flareThreeRef} rotation={[1.18, -0.28, 2.82]}>
+        <mesh>
+          <torusGeometry args={[radius * 1.34, 0.007, 8, 96, Math.PI * 0.58]} />
+          <meshBasicMaterial
+            ref={flareThreeMaterialRef}
+            blending={AdditiveBlending}
+            color={color}
+            depthWrite={false}
+            opacity={0.25}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+      <group ref={coronaRef}>
+        <mesh scale={1.3}>
+          <sphereGeometry args={[radius, 48, 48]} />
+          <meshBasicMaterial
+            ref={innerCoronaMaterialRef}
+            blending={AdditiveBlending}
+            color="#ff9b45"
+            depthWrite={false}
+            opacity={0.12}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+        <mesh scale={1.54}>
+          <sphereGeometry args={[radius, 48, 48]} />
+          <meshBasicMaterial
+            ref={outerCoronaMaterialRef}
+            blending={AdditiveBlending}
+            color={color}
+            depthWrite={false}
+            opacity={0.055}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
     </group>
   )
 }
 
-export function Galaxy() {
+function createBlockPlanets(blocks: ChainBlock[], orbitSpecs: OrbitSpec[]) {
+  return blocks.map<ScenePlanet>((block, index) => ({
+    block,
+    category: block.dominantCategory,
+    color: categoryColors[block.dominantCategory],
+    failedTxRatio: block.failedTxRatio,
+    hot: block.recency === 1,
+    id: index,
+    orbit: orbitSpecs[index],
+    recency: block.recency,
+    size: block.size,
+    title: `Slot ${block.slot}`,
+    variant: resolvePlanetVariant(block, index),
+  }))
+}
+
+function createProgramActivityBlocks(
+  activityResult: ProgramActivityResult | null,
+  program: ProgramRollup | null,
+): ChainBlock[] {
+  if (!activityResult || !program) {
+    return []
+  }
+
+  const orderedBlocks = [...activityResult.blocks].sort(
+    (blockA, blockB) => blockA.slot - blockB.slot,
+  )
+
+  if (orderedBlocks.length === 0) {
+    return []
+  }
+
+  const transactionWeights = orderedBlocks.map((block) =>
+    Math.sqrt(Math.max(0, block.txCount)),
+  )
+  const minTransactions = Math.min(...transactionWeights)
+  const maxTransactions = Math.max(...transactionWeights)
+  const transactionRange = Math.max(1, maxTransactions - minTransactions)
+  const count = Math.max(1, orderedBlocks.length - 1)
+
+  return orderedBlocks.map((block, index) => {
+    const enrichedBlock = getCachedBlockBySlot(block.slot)
+    const recency = count === 0 ? 1 : index / count
+    const transactionWeight =
+      (Math.sqrt(Math.max(0, block.txCount)) - minTransactions) /
+      transactionRange
+    const size = Number(
+      (
+        minProgramPlanetRadius +
+        transactionWeight * (maxProgramPlanetRadius - minProgramPlanetRadius)
+      ).toFixed(3),
+    )
+    const categoryMix = {
+      defi: 0,
+      nft: 0,
+      other: 0,
+      token: 0,
+      [program.category]: 1,
+    } as CategoryMix
+    const fallbackProgramCounts = {
+      defi: 0,
+      infra: 0,
+      nft: 0,
+      other: 0,
+      token: 0,
+      vote: 0,
+      [program.category]: block.txCount,
+    } as ProgramCounts
+    const programCounts = enrichedBlock
+      ? {
+          ...enrichedBlock.programCounts,
+          [program.category]: Math.max(
+            enrichedBlock.programCounts[program.category],
+            block.txCount,
+          ),
+        }
+      : fallbackProgramCounts
+
+    return {
+      blockTime: enrichedBlock?.blockTime ?? null,
+      categoryMix: enrichedBlock?.categoryMix ?? categoryMix,
+      dominantCategory: enrichedBlock?.dominantCategory ?? program.category,
+      dominantProgram:
+        enrichedBlock?.dominantProgram ?? program.name ?? program.programId,
+      failedTxRatio: enrichedBlock?.failedTxRatio ?? 0,
+      programCounts,
+      recency: enrichedBlock?.recency ?? recency,
+      size,
+      slot: block.slot,
+      timestamp: enrichedBlock?.timestamp ?? block.timestamp,
+      transactions: block.txCount,
+    }
+  })
+}
+
+function createProgramActivityPlanets(
+  activityResult: ProgramActivityResult | null,
+  program: ProgramRollup | null,
+  centerSunRadius = sunRadius,
+) {
+  const blocks = createProgramActivityBlocks(activityResult, program)
+  const orbitSpecs = createOrbitSpecs(blocks, centerSunRadius)
+
+  return createBlockPlanets(blocks, orbitSpecs)
+}
+
+function createProgramSizeScale(programs: ProgramRollup[]) {
+  const transactionWeights = programs.map((program) =>
+    Math.sqrt(Math.max(0, program.totalTxns)),
+  )
+  const minTransactions = Math.min(...transactionWeights)
+  const maxTransactions = Math.max(...transactionWeights)
+  const transactionRange = Math.max(1, maxTransactions - minTransactions)
+
+  return (program: ProgramRollup) => {
+    const transactionWeight =
+      (Math.sqrt(Math.max(0, program.totalTxns)) - minTransactions) /
+      transactionRange
+
+    return Number(
+      (
+        minProgramPlanetRadius +
+        transactionWeight * (maxProgramPlanetRadius - minProgramPlanetRadius)
+      ).toFixed(3),
+    )
+  }
+}
+
+function createProgramPlanets(programs: ProgramRollup[]) {
+  const getProgramSize = createProgramSizeScale(programs)
+  const basePlanets = programs.map((program, index) => ({
+    category: program.category,
+    color: categoryColors[program.category],
+    failedTxRatio: 0,
+    hot: index === 0,
+    id: index,
+    program,
+    recency: programs.length <= 1 ? 1 : 1 - index / (programs.length - 1),
+    size: getProgramSize(program),
+    title: program.name ?? program.programId,
+    variant: resolvePlanetVariantFromProgram(
+      program.category,
+      program.name ?? program.programId,
+      index,
+    ),
+  }))
+  const orbitSpecs = createOrbitSpecs(basePlanets)
+
+  return basePlanets.map<ScenePlanet>((planet, index) => ({
+    ...planet,
+    orbit: orbitSpecs[index],
+  }))
+}
+
+export function RecentBlocksGalaxy() {
   const visibleBlockCount = getVisibleBlockCount()
   const initialFocusBlockId = useMemo(() => getInitialFocusBlockId(), [])
   const chainData = useSolanaBlocks(visibleBlockCount)
@@ -593,19 +1235,8 @@ export function Galaxy() {
     () => createOrbitSpecs(chainData.blocks),
     [chainData.blocks],
   )
-  const blocks = useMemo<SceneBlock[]>(
-    () =>
-      chainData.blocks.map((block, index) => {
-        const color = categoryColors[block.dominantCategory]
-
-        return {
-          ...block,
-          color,
-          id: index,
-          orbit: orbitSpecs[index],
-          variant: resolvePlanetVariant(block, index),
-        }
-      }),
+  const blocks = useMemo<ScenePlanet[]>(
+    () => createBlockPlanets(chainData.blocks, orbitSpecs),
     [chainData.blocks, orbitSpecs],
   )
   const [selectedBlockId, setSelectedBlockId] = useState<number | null>(
@@ -624,7 +1255,7 @@ export function Galaxy() {
         <p>Recent Solana blocks orbiting a live-data sun.</p>
       </div>
       {showLegend && <CategoryLegend onDismiss={() => setShowLegend(false)} />}
-      <InfoPanel selectedBlock={selectedBlock} source={chainData.source} />
+      <BlockInfoPanel selectedBlock={selectedBlock} source={chainData.source} />
       <Canvas
         camera={{ position: [0, 12.2, 17.6], fov: 48, rotation: [-0.606, 0, 0] }}
         className={`galaxy-canvas ${isHoveringBlock ? 'is-hovering-block' : ''}`}
@@ -634,7 +1265,7 @@ export function Galaxy() {
         onPointerMissed={() => setDeselectSignal((signal) => signal + 1)}
       >
         <BlockchainScene
-          blocks={blocks}
+          planets={blocks}
           deselectSignal={deselectSignal}
           initialFocusBlockId={initialFocusBlockId}
           onHoverBlock={setIsHoveringBlock}
@@ -647,15 +1278,532 @@ export function Galaxy() {
   )
 }
 
+export function Galaxy() {
+  const shellRef = useRef<HTMLElement>(null)
+  const titleRef = useRef<HTMLDivElement>(null)
+  const warpTimeoutRef = useRef<number | undefined>(undefined)
+  const programRollup = useMemo(() => getCachedProgramRollup(), [])
+  const initialFocusProgramId = useMemo(() => getInitialFocusProgramId(), [])
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const planets = useMemo(
+    () => createProgramPlanets(programRollup.topPrograms),
+    [programRollup.topPrograms],
+  )
+  const initialProgram = initialFocusProgramId === null
+    ? null
+    : (planets[initialFocusProgramId]?.program ?? null)
+  const [selectedProgramId, setSelectedProgramId] = useState<number | null>(
+    initialFocusProgramId,
+  )
+  const [activeScene, setActiveScene] = useState<ActiveScene>('ecosystem')
+  const [warpDirection, setWarpDirection] = useState<WarpDirection | null>(null)
+  const [destinationProgram, setDestinationProgram] =
+    useState<ProgramRollup | null>(initialProgram)
+  const [deselectSignal, setDeselectSignal] = useState(0)
+  const [isHoveringProgram, setIsHoveringProgram] = useState(false)
+  const [showLegend, setShowLegend] = useState(true)
+  const [searchValue, setSearchValue] = useState(
+    initialProgram?.name ?? initialProgram?.programId ?? '',
+  )
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const [activeProgramId, setActiveProgramId] = useState<string | null>(
+    initialProgram?.programId ?? null,
+  )
+  const [activityResult, setActivityResult] =
+    useState<ProgramActivityResult | null>(null)
+  const [selectedDestinationBlockId, setSelectedDestinationBlockId] =
+    useState<number | null>(null)
+  const selectedProgram =
+    selectedProgramId === null ? null : (planets[selectedProgramId] ?? null)
+  const activityStatus =
+    activeProgramId === null
+      ? 'idle'
+      : activityResult?.programId === activeProgramId
+        ? 'ready'
+        : 'loading'
+  const popularPrograms = useMemo(
+    () => programRollup.topPrograms.filter((program) => program.name !== null),
+    [programRollup.topPrograms],
+  )
+  const destinationSunRadius = useMemo(
+    () =>
+      getDestinationSunRadius(
+        getDestinationActivityMagnitude(activityResult, destinationProgram),
+      ),
+    [activityResult, destinationProgram],
+  )
+  const destinationPlanets = useMemo(
+    () =>
+      createProgramActivityPlanets(
+        activityResult,
+        destinationProgram,
+        destinationSunRadius,
+      ),
+    [activityResult, destinationProgram, destinationSunRadius],
+  )
+  const selectedDestinationBlock =
+    selectedDestinationBlockId === null
+      ? null
+      : (destinationPlanets[selectedDestinationBlockId] ?? null)
+  const destinationSource = activityResult?.source ?? 'cached'
+  const isWarping = warpDirection !== null
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current
+    const title = titleRef.current
+
+    if (!shell || !title) {
+      return
+    }
+
+    const updateTitleHeight = () => {
+      const titleHeight = Math.ceil(title.getBoundingClientRect().height)
+      shell.style.setProperty('--title-block-height', `${titleHeight + 30}px`)
+    }
+    const resizeObserver = new ResizeObserver(updateTitleHeight)
+
+    updateTitleHeight()
+    resizeObserver.observe(title)
+    window.addEventListener('resize', updateTitleHeight)
+
+    return () => {
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', updateTitleHeight)
+    }
+  }, [])
+
+  const finishWarpAfter = useCallback(
+    (direction: WarpDirection) => {
+      if (warpTimeoutRef.current) {
+        window.clearTimeout(warpTimeoutRef.current)
+      }
+
+      const duration = prefersReducedMotion
+        ? reducedMotionWarpDurationMs
+        : warpDurationMs
+      warpTimeoutRef.current = window.setTimeout(() => {
+        setActiveScene(direction === 'to-destination' ? 'destination' : 'ecosystem')
+        setWarpDirection(null)
+        warpTimeoutRef.current = undefined
+      }, duration)
+    },
+    [prefersReducedMotion],
+  )
+
+  const beginWarpToDestination = useCallback(
+    (program: ProgramRollup) => {
+      if (warpDirection !== null) {
+        return
+      }
+
+      setDestinationProgram(program)
+      setWarpDirection('to-destination')
+      finishWarpAfter('to-destination')
+    },
+    [finishWarpAfter, warpDirection],
+  )
+
+  const selectProgram = useCallback(
+    (programId: string) => {
+      const normalizedProgramId = programId.trim()
+
+      if (!normalizedProgramId || warpDirection !== null) {
+        return
+      }
+
+      const planetIndex = planets.findIndex(
+        (planet) => planet.program?.programId === normalizedProgramId,
+      )
+      const knownProgram = programRollup.programs.find(
+        (program) => program.programId === normalizedProgramId,
+      )
+      const knownMetadata = getKnownProgramMetadata(normalizedProgramId)
+      const targetProgram: ProgramRollup =
+        knownProgram
+          ? {
+              ...knownProgram,
+              category: knownMetadata?.category ?? knownProgram.category,
+              name: knownProgram.name ?? knownMetadata?.name ?? null,
+            }
+          : ({
+              appearedInSlots: [],
+              blockCount: 0,
+              category: knownMetadata?.category ?? 'other',
+              name: knownMetadata?.name ?? null,
+              programId: normalizedProgramId,
+              totalTxns: 0,
+            } satisfies ProgramRollup)
+
+      setSelectedProgramId(planetIndex === -1 ? null : planetIndex)
+      setSelectedDestinationBlockId(null)
+      setSearchValue(knownProgram?.name ?? knownMetadata?.name ?? normalizedProgramId)
+      if (searchInputRef.current) {
+        searchInputRef.current.value =
+          knownProgram?.name ?? knownMetadata?.name ?? normalizedProgramId
+      }
+      setActiveProgramId(normalizedProgramId)
+      setActivityResult(null)
+      beginWarpToDestination(targetProgram)
+    },
+    [beginWarpToDestination, planets, programRollup.programs, warpDirection],
+  )
+
+  const returnHome = useCallback(() => {
+    if (warpDirection !== null) {
+      return
+    }
+
+    setSelectedProgramId(null)
+    setSelectedDestinationBlockId(null)
+    setWarpDirection('to-ecosystem')
+    finishWarpAfter('to-ecosystem')
+  }, [finishWarpAfter, warpDirection])
+
+  useEffect(() => {
+    return () => {
+      if (warpTimeoutRef.current) {
+        window.clearTimeout(warpTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    const submittedValue = searchInputRef.current?.value ?? searchValue
+    const normalizedSearchValue = submittedValue.trim().toLowerCase()
+    const matchingProgram = popularPrograms.find(
+      (program) =>
+        program.name?.toLowerCase() === normalizedSearchValue ||
+        program.programId.toLowerCase() === normalizedSearchValue,
+    )
+
+    selectProgram(matchingProgram?.programId ?? submittedValue)
+  }
+
+  useEffect(() => {
+    if (!activeProgramId) {
+      return
+    }
+
+    let cancelled = false
+
+    fetchProgramActivity(activeProgramId).then((result) => {
+      if (!cancelled) {
+        setActivityResult(result)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProgramId])
+
+  return (
+    <main className="galaxy-shell" ref={shellRef}>
+      <div
+        className={`galaxy-title ${activeScene === 'destination' ? 'is-hidden' : ''}`}
+        aria-hidden="true"
+        ref={titleRef}
+      >
+        <h1>Blockchain Galaxy</h1>
+        <p>Major Solana programs orbiting the mainnet sun.</p>
+      </div>
+      {activeScene === 'ecosystem' && (
+        <>
+          <ProgramSearchPanel
+            activityResult={activityResult}
+            activityStatus={activityStatus}
+            inputRef={searchInputRef}
+            onSubmit={handleSearchSubmit}
+            popularPrograms={popularPrograms}
+            searchValue={searchValue}
+            setSearchValue={setSearchValue}
+          />
+          {showLegend && <CategoryLegend onDismiss={() => setShowLegend(false)} />}
+          <ProgramInfoPanel
+            recentBlockCount={programRollup.blockCount}
+            selectedProgram={selectedProgram}
+          />
+        </>
+      )}
+      {activeScene === 'destination' && (
+        <>
+          <DestinationHud
+            activityResult={activityResult}
+            activityStatus={activityStatus}
+            onReturnHome={returnHome}
+            program={destinationProgram}
+          />
+          <BlockInfoPanel
+            inspectedProgram={destinationProgram}
+            selectedBlock={selectedDestinationBlock}
+            source={destinationSource}
+          />
+        </>
+      )}
+      <WarpOverlay
+        direction={warpDirection}
+        prefersReducedMotion={prefersReducedMotion}
+        program={destinationProgram}
+      />
+      <Canvas
+        camera={{ position: [0, 12.2, 17.6], fov: 48, rotation: [-0.606, 0, 0] }}
+        className={`galaxy-canvas ${
+          isHoveringProgram ? 'is-hovering-block' : ''
+        }`}
+        dpr={0.85}
+        gl={{ antialias: true, toneMapping: ACESFilmicToneMapping }}
+        onCreated={({ camera }) => camera.lookAt(0, 0, 0)}
+        onPointerMissed={() => setDeselectSignal((signal) => signal + 1)}
+      >
+        {activeScene === 'destination' ? (
+          <BlockchainScene
+            planets={destinationPlanets}
+            deselectSignal={deselectSignal}
+            emptyMessage={
+              activityStatus === 'loading'
+                ? 'Loading recent program activity...'
+                : 'No recent activity found'
+            }
+            initialFocusBlockId={null}
+            onHoverBlock={setIsHoveringProgram}
+            prefersReducedMotion={prefersReducedMotion || isWarping}
+            selectedBlockId={selectedDestinationBlockId}
+            setSelectedBlockId={setSelectedDestinationBlockId}
+            sunColor={
+              destinationProgram
+                ? categoryColors[destinationProgram.category]
+                : '#28ffe7'
+            }
+            sunLabel={
+              destinationProgram
+                ? (destinationProgram.name ??
+                  shortProgramId(destinationProgram.programId))
+                : 'Program System'
+            }
+            sunRadius={destinationSunRadius}
+            sunSubLabel={getDestinationSunSubLabel(
+              destinationProgram,
+              activityResult,
+              activityStatus,
+            )}
+          />
+        ) : (
+          <BlockchainScene
+            planets={planets}
+            deselectSignal={deselectSignal}
+            initialFocusBlockId={initialFocusProgramId}
+            onHoverBlock={setIsHoveringProgram}
+            prefersReducedMotion={prefersReducedMotion || isWarping}
+            selectedBlockId={selectedProgramId}
+            setSelectedBlockId={setSelectedProgramId}
+          />
+        )}
+      </Canvas>
+    </main>
+  )
+}
+
+function ProgramSearchPanel({
+  activityResult,
+  activityStatus,
+  inputRef,
+  onSubmit,
+  popularPrograms,
+  searchValue,
+  setSearchValue,
+}: {
+  activityResult: ProgramActivityResult | null
+  activityStatus: 'idle' | 'loading' | 'ready'
+  inputRef: RefObject<HTMLInputElement | null>
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  popularPrograms: ProgramRollup[]
+  searchValue: string
+  setSearchValue: (value: string) => void
+}) {
+  const visibleBlocks = activityResult?.blocks.slice(0, 8) ?? []
+  const resultName =
+    activityResult?.name ?? shortProgramId(activityResult?.programId ?? '')
+
+  return (
+    <section className="program-search-panel" aria-label="Program search">
+      <form onSubmit={onSubmit}>
+        <input
+          aria-label="Search Solana program"
+          defaultValue={searchValue}
+          list="program-search-options"
+          onChange={(event) => setSearchValue(event.target.value)}
+          onInput={(event) => setSearchValue(event.currentTarget.value)}
+          placeholder={defaultSearchPlaceholder}
+          ref={inputRef}
+        />
+        <button type="submit">Inspect</button>
+      </form>
+      <datalist id="program-search-options">
+        {popularPrograms.map((program) => (
+          <option key={program.programId} value={program.name ?? program.programId}>
+            {`${categoryLabels[program.category]} · ${program.totalTxns.toLocaleString()} txns · ${shortProgramId(program.programId)}`}
+          </option>
+        ))}
+      </datalist>
+      {activityStatus === 'loading' && (
+        <div className="program-search-result is-muted">Checking recent activity...</div>
+      )}
+      {activityStatus === 'ready' && activityResult && (
+        <div className="program-search-result">
+          <div className="program-search-result__summary">
+            <strong>{resultName}</strong>
+            <span>
+              found in {activityResult.blocks.length} of last{' '}
+              {activityResult.blockWindow} blocks ·{' '}
+              {activityResult.totalTxns.toLocaleString()} txns
+            </span>
+            <span
+              className={`program-search-result__source is-${activityResult.source}`}
+            >
+              <i />
+              {activityResult.source === 'live' ? 'LIVE' : 'CACHED'}
+            </span>
+          </div>
+          {activityResult.note && (
+            <p className="program-search-result__note">{activityResult.note}</p>
+          )}
+          <div className="program-search-result__blocks">
+            {visibleBlocks.length > 0 ? (
+              visibleBlocks.map((block) => (
+                <div key={block.slot}>
+                  <span>Slot {block.slot}</span>
+                  <span>{block.txCount} txns</span>
+                  <span>{block.timestamp}</span>
+                </div>
+              ))
+            ) : (
+              <div>
+                <span>No recent cached block hits</span>
+                <span>0 txns</span>
+                <span>--:--:--</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function DestinationHud({
+  activityResult,
+  activityStatus,
+  onReturnHome,
+  program,
+}: {
+  activityResult: ProgramActivityResult | null
+  activityStatus: 'idle' | 'loading' | 'ready'
+  onReturnHome: () => void
+  program: ProgramRollup | null
+}) {
+  const programName = program?.name ?? shortProgramId(program?.programId ?? '')
+  const category = program ? categoryLabels[program.category] : 'Program'
+  const sourceLabel =
+    activityResult?.source === 'live'
+      ? 'LIVE'
+      : activityResult?.source === 'cached'
+        ? 'CACHED'
+        : 'LOADING'
+
+  return (
+    <section className="destination-hud" aria-label="Destination system">
+      <button onClick={onReturnHome} type="button">
+        Back to Solana
+      </button>
+      <div>
+        <span>Destination</span>
+        <strong>{programName || 'Program System'}</strong>
+        <p>
+          {category} system · {sourceLabel} ·{' '}
+          {activityStatus === 'ready'
+            ? `${activityResult?.blocks.length ?? 0} block planets`
+            : 'system loading...'}
+        </p>
+      </div>
+    </section>
+  )
+}
+
+function getDestinationSunSubLabel(
+  program: ProgramRollup | null,
+  activityResult: ProgramActivityResult | null,
+  activityStatus: 'idle' | 'loading' | 'ready',
+) {
+  if (!program) {
+    return activityStatus === 'loading' ? 'Loading program activity' : undefined
+  }
+
+  const sourceLabel =
+    activityResult?.source === 'live'
+      ? 'LIVE'
+      : activityResult?.source === 'cached'
+        ? 'CACHED'
+        : 'LOADING'
+  const totalTxns = activityResult?.totalTxns ?? program.totalTxns
+
+  return `${categoryLabels[program.category]} · ${totalTxns.toLocaleString()} txns · ${sourceLabel}`
+}
+
+function WarpOverlay({
+  direction,
+  prefersReducedMotion,
+  program,
+}: {
+  direction: WarpDirection | null
+  prefersReducedMotion: boolean
+  program: ProgramRollup | null
+}) {
+  const programName = program?.name ?? shortProgramId(program?.programId ?? '')
+  const label =
+    direction === 'to-ecosystem'
+      ? 'Returning to Solana Mainnet'
+      : `Warping to ${programName || 'program system'}`
+
+  return (
+    <div
+      aria-hidden={direction === null}
+      className={[
+        'warp-overlay',
+        direction ? 'is-active' : '',
+        direction === 'to-ecosystem' ? 'is-returning' : '',
+        prefersReducedMotion ? 'is-reduced-motion' : '',
+      ].join(' ')}
+    >
+      <div className="warp-overlay__tunnel">
+        {Array.from({ length: 28 }, (_, index) => (
+          <span key={index} style={{ '--i': index } as CSSProperties} />
+        ))}
+      </div>
+      <div className="warp-overlay__flash" />
+      <div className="warp-overlay__label">{label}</div>
+    </div>
+  )
+}
+
+function shortProgramId(programId: string) {
+  if (programId.length <= 12) {
+    return programId || 'Program'
+  }
+
+  return `${programId.slice(0, 4)}...${programId.slice(-4)}`
+}
+
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`
 }
 
 function CategoryLegend({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <aside className="category-legend" aria-label="Block color legend">
+    <aside className="category-legend" aria-label="Program category legend">
       <div className="category-legend__topline">
-        <span>Activity</span>
+        <span>World Type</span>
         <button aria-label="Hide category legend" onClick={onDismiss} type="button">
           ×
         </button>
@@ -675,16 +1823,20 @@ function CategoryLegend({ onDismiss }: { onDismiss: () => void }) {
   )
 }
 
-function InfoPanel({
+function BlockInfoPanel({
+  inspectedProgram,
   selectedBlock,
   source,
 }: {
-  selectedBlock: SceneBlock | null
+  inspectedProgram?: ProgramRollup | null
+  selectedBlock: ScenePlanet | null
   source: DataSource
 }) {
+  const block = selectedBlock?.block
+
   return (
     <aside
-      className={`block-info-panel ${selectedBlock ? 'is-visible' : ''}`}
+      className={`block-info-panel ${block ? 'is-visible' : ''}`}
       style={
         { '--block-glow': selectedBlock?.color ?? '#28ffe7' } as CSSProperties
       }
@@ -699,18 +1851,18 @@ function InfoPanel({
       <dl>
         <div>
           <dt>Slot</dt>
-          <dd>{selectedBlock?.slot ?? '---'}</dd>
+          <dd>{block?.slot ?? '---'}</dd>
         </div>
         <div>
           <dt>Transactions</dt>
-          <dd>{selectedBlock?.transactions ?? '---'}</dd>
+          <dd>{block?.transactions ?? '---'}</dd>
         </div>
         <div>
           <dt>Timestamp</dt>
-          <dd>{selectedBlock?.timestamp ?? '--:--:--'}</dd>
+          <dd>{block?.timestamp ?? '--:--:--'}</dd>
         </div>
       </dl>
-      {selectedBlock && (
+      {block && (
         <div className="block-info-panel__activity">
           <div className="block-info-panel__activity-title">Activity Mix</div>
           <div className="activity-mix-bar" aria-label="Activity mix">
@@ -720,11 +1872,11 @@ function InfoPanel({
                 style={
                   {
                     '--category-color': categoryColors[category],
-                    width: `${selectedBlock.categoryMix[category] * 100}%`,
+                    width: `${block.categoryMix[category] * 100}%`,
                   } as CSSProperties
                 }
                 title={`${categoryLabels[category]} ${formatPercent(
-                  selectedBlock.categoryMix[category],
+                  block.categoryMix[category],
                 )}`}
               />
             ))}
@@ -733,15 +1885,90 @@ function InfoPanel({
             {activityCategories.map((category) => (
               <span key={category}>
                 {categoryLabels[category]}{' '}
-                {formatPercent(selectedBlock.categoryMix[category])}
+                {formatPercent(block.categoryMix[category])}
               </span>
             ))}
           </div>
           <div className="activity-mix-footnote">
-            Vote {selectedBlock.programCounts.vote} · Infra{' '}
-            {selectedBlock.programCounts.infra} · Failed{' '}
-            {formatPercent(selectedBlock.failedTxRatio)}
+            Vote {block.programCounts.vote} · Infra {block.programCounts.infra} ·
+            Failed {formatPercent(block.failedTxRatio)}
           </div>
+          {inspectedProgram && (
+            <div className="block-info-panel__programs">
+              <div className="block-info-panel__activity-title">Program</div>
+              <a
+                href={`https://solscan.io/account/${inspectedProgram.programId}`}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <span>{inspectedProgram.name ?? 'Selected Program'}</span>
+                <small>{shortProgramId(inspectedProgram.programId)}</small>
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function ProgramInfoPanel({
+  recentBlockCount,
+  selectedProgram,
+}: {
+  recentBlockCount: number
+  selectedProgram: ScenePlanet | null
+}) {
+  const program = selectedProgram?.program
+
+  return (
+    <aside
+      className={`block-info-panel program-info-panel ${
+        program ? 'is-visible' : ''
+      }`}
+      style={
+        { '--block-glow': selectedProgram?.color ?? '#28ffe7' } as CSSProperties
+      }
+    >
+      <div className="block-info-panel__topline">
+        <div className="block-info-panel__label">Selected Program</div>
+        <div className="block-info-panel__source is-cached">
+          <span />
+          SNAPSHOT
+        </div>
+      </div>
+      <dl>
+        <div>
+          <dt>Program</dt>
+          <dd>{program?.name ?? '---'}</dd>
+        </div>
+        <div>
+          <dt>Category</dt>
+          <dd>{program ? categoryLabels[program.category] : '---'}</dd>
+        </div>
+        <div>
+          <dt>Total Txns</dt>
+          <dd>{program?.totalTxns.toLocaleString() ?? '---'}</dd>
+        </div>
+        <div>
+          <dt>Appeared</dt>
+          <dd>
+            {program
+              ? `${program.blockCount} of ${recentBlockCount}`
+              : `0 of ${recentBlockCount}`}
+          </dd>
+        </div>
+      </dl>
+      {program && (
+        <div className="program-info-panel__program-id">
+          <span>Program ID</span>
+          <a
+            href={`https://solscan.io/account/${program.programId}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {program.programId}
+          </a>
         </div>
       )}
     </aside>

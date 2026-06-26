@@ -4,8 +4,12 @@ import snapshot from './chain-snapshot.json'
 
 const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com'
 const LIVE_TIMEOUT_MS = 3_800
+const PROGRAM_ACTIVITY_TIMEOUT_MS = 4_800
+const PROGRAM_ACTIVITY_BLOCK_COUNT = 25
+const PROGRAM_ACTIVITY_RETRY_DELAY_MS = 450
 const MIN_PLANET_RADIUS = 0.28
 const MAX_PLANET_RADIUS = 0.62
+const HELIUS_RPC_ORIGIN = 'https://mainnet.helius-rpc.com/'
 
 export type DataSource = 'cached' | 'live'
 export type ActivityCategory = 'defi' | 'token' | 'nft' | 'other'
@@ -31,6 +35,60 @@ export type ChainBlock = {
   transactions: number
 }
 
+export type ProgramRollup = {
+  appearedInSlots: number[]
+  blockCount: number
+  category: ActivityCategory
+  name: string | null
+  programId: string
+  slotCounts?: Record<string, number>
+  totalTxns: number
+}
+
+export type ProgramActivityBlock = {
+  slot: number
+  timestamp: string
+  txCount: number
+}
+
+export type ProgramActivityResult = {
+  blockWindow: number
+  blocks: ProgramActivityBlock[]
+  elapsedMs: number
+  name: string | null
+  note?: string
+  programId: string
+  source: DataSource
+  totalTxns: number
+}
+
+export type KnownProgramMetadata = {
+  category: ActivityCategory
+  name: string
+}
+
+const KNOWN_PROGRAM_METADATA = new Map<string, KnownProgramMetadata>([
+  ['JUP2jxvS5ji3Yj2hfRCKW3tnL3hq6h3JNsxFYgNn3n9', { category: 'defi', name: 'Jupiter' }],
+  ['JUP3c2Uhhu0g8Q6NDtY9CgzGbSadtWSJbAQGtD2q7SU', { category: 'defi', name: 'Jupiter' }],
+  ['JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', { category: 'defi', name: 'Jupiter' }],
+  ['JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', { category: 'defi', name: 'Jupiter' }],
+  ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', { category: 'defi', name: 'Raydium AMM' }],
+  ['CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', { category: 'defi', name: 'Raydium CLMM' }],
+  ['CAMMCzo5YL8w4VFF8KVHrK22GGUQpVTaW7grrKgrWqK', { category: 'defi', name: 'Raydium CLMM' }],
+  ['CPMMoo8L3F4NbTegBCKVNwbryeYbJ4YF9t4r5gn1s9y', { category: 'defi', name: 'Raydium CP' }],
+  ['5quBtoiQqxF9J9tYNNQDPqBrVgbGpxRFNZbQeTeM2UZa', { category: 'defi', name: 'Raydium' }],
+  ['whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', { category: 'defi', name: 'Orca Whirlpool' }],
+  ['9W959DqEETiGZocYWCQPaJ6nK9joxTywcxSUGWNA3Y3r', { category: 'defi', name: 'Orca V2' }],
+  ['PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY', { category: 'defi', name: 'Phoenix' }],
+  ['11111111111111111111111111111111', { category: 'token', name: 'System' }],
+  ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', { category: 'token', name: 'SPL Token' }],
+  ['TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', { category: 'token', name: 'Token-2022' }],
+  ['M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K', { category: 'nft', name: 'Magic Eden' }],
+  ['TCMPhJdwDryooaGtiocG1u3xcYbRpiJzb283XfCZsDp', { category: 'nft', name: 'Tensor' }],
+  ['TAMM6ub33ij1mbetoMyVBLeKY5iP41i4UPUJQGkhfsg', { category: 'nft', name: 'Tensor' }],
+  ['metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s', { category: 'nft', name: 'Metaplex' }],
+])
+
 type SnapshotBlock = {
   blockTime: number | null
   categoryMix?: CategoryMix
@@ -44,6 +102,8 @@ type SnapshotBlock = {
 
 type SnapshotFile = {
   blocks: SnapshotBlock[]
+  programs?: ProgramRollup[]
+  topPrograms?: ProgramRollup[]
 }
 
 export type ChainDataState = {
@@ -82,6 +142,16 @@ function formatBlockTime(blockTime: number | null) {
     minute: '2-digit',
     second: '2-digit',
   }).format(new Date(blockTime * 1000))
+}
+
+function getBlockTimestamp(slot: number, fallbackBlockTime?: number | null) {
+  const snapshotFile = snapshot as SnapshotFile
+  const blockTime =
+    fallbackBlockTime ??
+    snapshotFile.blocks.find((block) => block.slot === slot)?.blockTime ??
+    null
+
+  return formatBlockTime(blockTime)
 }
 
 function getDefaultProgramCounts(): ProgramCounts {
@@ -143,6 +213,21 @@ export function normalizeBlocks(
   })
 }
 
+let cachedBlockLookup: Map<number, ChainBlock> | null = null
+
+export function getCachedBlockBySlot(slot: number) {
+  if (!cachedBlockLookup) {
+    cachedBlockLookup = new Map(
+      normalizeBlocks(
+        (snapshot as SnapshotFile).blocks,
+        (snapshot as SnapshotFile).blocks.length,
+      ).map((block) => [block.slot, block]),
+    )
+  }
+
+  return cachedBlockLookup.get(slot) ?? null
+}
+
 async function fetchRecentSolanaBlocks(targetCount: number) {
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed')
   const latestSlot = await connection.getSlot('confirmed')
@@ -177,6 +262,276 @@ async function fetchRecentSolanaBlocks(targetCount: number) {
 
 function getCachedBlocks(targetCount: number) {
   return normalizeBlocks((snapshot as SnapshotFile).blocks, targetCount)
+}
+
+export function getCachedProgramRollup() {
+  const snapshotFile = snapshot as SnapshotFile
+
+  return {
+    blockCount: snapshotFile.blocks.length,
+    programs: snapshotFile.programs ?? [],
+    topPrograms: snapshotFile.topPrograms ?? [],
+  }
+}
+
+export function getKnownProgramMetadata(programId: string) {
+  return KNOWN_PROGRAM_METADATA.get(programId) ?? null
+}
+
+function getProgramName(programId: string) {
+  const snapshotFile = snapshot as SnapshotFile
+  return (
+    snapshotFile.programs?.find((program) => program.programId === programId)
+      ?.name ??
+    getKnownProgramMetadata(programId)?.name ??
+    null
+  )
+}
+
+function getCachedProgramActivity(
+  programId: string,
+  elapsedMs: number,
+  note?: string,
+): ProgramActivityResult {
+  const snapshotFile = snapshot as SnapshotFile
+  const program =
+    snapshotFile.programs?.find((entry) => entry.programId === programId) ??
+    snapshotFile.topPrograms?.find((entry) => entry.programId === programId) ??
+    null
+  const recentSlots = snapshotFile.blocks
+    .map((block) => block.slot)
+    .sort((slotA, slotB) => slotA - slotB)
+    .slice(-PROGRAM_ACTIVITY_BLOCK_COUNT)
+  const recentSlotSet = new Set(recentSlots)
+  const blocks = Object.entries(program?.slotCounts ?? {})
+    .map(([slot, txCount]) => ({
+      slot: Number(slot),
+      timestamp: getBlockTimestamp(Number(slot)),
+      txCount,
+    }))
+    .filter((block) => recentSlotSet.has(block.slot))
+    .sort((blockA, blockB) => blockB.slot - blockA.slot)
+  const totalTxns = blocks.reduce((sum, block) => sum + block.txCount, 0)
+
+  return {
+    blockWindow: recentSlots.length,
+    blocks,
+    elapsedMs,
+    name: program?.name ?? getProgramName(programId),
+    note,
+    programId,
+    source: 'cached',
+    totalTxns,
+  }
+}
+
+async function withAbortableTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+) {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await operation(controller.signal)
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
+async function fetchJsonRpc<T>(
+  rpcUrl: string,
+  method: string,
+  params: unknown[],
+  signal: AbortSignal,
+) {
+  const response = await fetch(rpcUrl, {
+    body: JSON.stringify({
+      id: `${method}-${Date.now()}`,
+      jsonrpc: '2.0',
+      method,
+      params,
+    }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '')
+
+    throw new Error(
+      `${method} RPC request failed with ${response.status}: ${
+        errorBody || response.statusText || 'No response body'
+      }`,
+    )
+  }
+
+  const payload = (await response.json()) as {
+    error?: { message?: string }
+    result?: T
+  }
+
+  if (payload.error) {
+    throw new Error(
+      `${method} RPC error: ${payload.error.message ?? 'Unknown RPC error'}`,
+    )
+  }
+
+  return payload.result as T
+}
+
+async function fetchLiveProgramActivityOnce(
+  programId: string,
+  signal: AbortSignal,
+) {
+  const heliusApiKey = import.meta.env.VITE_HELIUS_API_KEY as string | undefined
+
+  if (!heliusApiKey?.trim()) {
+    throw new Error('VITE_HELIUS_API_KEY is not configured')
+  }
+
+  const rpcUrl = `${HELIUS_RPC_ORIGIN}?api-key=${encodeURIComponent(
+    heliusApiKey.trim(),
+  )}`
+
+  console.info(
+    '[Blockchain Galaxy] attempting live fetch',
+    {
+      endpoint: `${HELIUS_RPC_ORIGIN}?api-key=<redacted>`,
+      hasKey: true,
+      programId,
+    },
+  )
+  const latestSlot = await fetchJsonRpc<number>(
+    rpcUrl,
+    'getSlot',
+    [{ commitment: 'confirmed' }],
+    signal,
+  )
+  const slots =
+    (await fetchJsonRpc<number[]>(
+      rpcUrl,
+      'getBlocks',
+      [
+        Math.max(0, latestSlot - PROGRAM_ACTIVITY_BLOCK_COUNT * 4),
+        latestSlot,
+        { commitment: 'confirmed' },
+      ],
+      signal,
+    )) ?? []
+  const recentSlots = slots.slice(-PROGRAM_ACTIVITY_BLOCK_COUNT)
+  const recentSlotSet = new Set(recentSlots)
+  const signatures =
+    (await fetchJsonRpc<
+      Array<{
+        blockTime?: number | null
+        slot: number
+      }>
+    >(
+      rpcUrl,
+      'getSignaturesForAddress',
+      [programId, { commitment: 'confirmed', limit: 1000 }],
+      signal,
+    )) ?? []
+  const blocksBySlot = new Map<number, { blockTime: number | null; txCount: number }>()
+
+  for (const signature of signatures) {
+    if (!recentSlotSet.has(signature.slot)) {
+      continue
+    }
+
+    const existingBlock = blocksBySlot.get(signature.slot) ?? {
+      blockTime: signature.blockTime ?? null,
+      txCount: 0,
+    }
+
+    existingBlock.txCount += 1
+    if (!existingBlock.blockTime && signature.blockTime) {
+      existingBlock.blockTime = signature.blockTime
+    }
+    blocksBySlot.set(signature.slot, existingBlock)
+  }
+
+  const activityBlocks = [...blocksBySlot.entries()]
+    .map(([slot, block]) => ({
+      slot,
+      timestamp: getBlockTimestamp(slot, block.blockTime),
+      txCount: block.txCount,
+    }))
+    .sort((blockA, blockB) => blockB.slot - blockA.slot)
+
+  return {
+    blockWindow: recentSlots.length,
+    blocks: activityBlocks,
+    elapsedMs: 0,
+    name: getProgramName(programId),
+    programId,
+    source: 'live' as const,
+    totalTxns: activityBlocks.reduce((sum, block) => sum + block.txCount, 0),
+  }
+}
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+export async function fetchProgramActivity(
+  programId: string,
+): Promise<ProgramActivityResult> {
+  const startedAt = window.performance.now()
+  const normalizedProgramId = programId.trim()
+
+  if (!normalizedProgramId) {
+    return getCachedProgramActivity(
+      normalizedProgramId,
+      0,
+      'Enter a program name or address to inspect recent activity.',
+    )
+  }
+
+  try {
+    const result = await withAbortableTimeout(async (signal) => {
+      try {
+        return await fetchLiveProgramActivityOnce(normalizedProgramId, signal)
+      } catch (error) {
+        console.warn('[Blockchain Galaxy] live fetch retrying', {
+          error: error instanceof Error ? error.message : String(error),
+          programId: normalizedProgramId,
+        })
+
+        if (signal.aborted) {
+          throw error
+        }
+
+        await sleep(PROGRAM_ACTIVITY_RETRY_DELAY_MS)
+        return fetchLiveProgramActivityOnce(normalizedProgramId, signal)
+      }
+    }, PROGRAM_ACTIVITY_TIMEOUT_MS)
+
+    console.info('[Blockchain Galaxy] live succeeded', {
+      blocks: result.blocks.length,
+      elapsedMs: Math.round(window.performance.now() - startedAt),
+      programId: normalizedProgramId,
+      totalTxns: result.totalTxns,
+    })
+
+    return {
+      ...result,
+      elapsedMs: Math.round(window.performance.now() - startedAt),
+    }
+  } catch (error) {
+    console.warn('[Blockchain Galaxy] live failed; falling back to cached', {
+      error: error instanceof Error ? error.message : String(error),
+      programId: normalizedProgramId,
+    })
+
+    return getCachedProgramActivity(
+      normalizedProgramId,
+      Math.round(window.performance.now() - startedAt),
+      'Live RPC was unavailable, so this result came from the cached snapshot.',
+    )
+  }
 }
 
 export function useSolanaBlocks(targetCount: number): ChainDataState {
