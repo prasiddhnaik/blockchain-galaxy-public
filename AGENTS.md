@@ -52,7 +52,7 @@
 - Live program search should keep the safe fallback behavior: timeout, retry, then cached snapshot data with a visible `LIVE` or `CACHED` badge.
 
 ## Repository Terms
-- `public repo` means this curated public-safe app repository.
+- `public repo` means `https://github.com/prasiddhnaik/blockchain-galaxy-solana` (`prasiddhnaik/blockchain-galaxy-solana`). This is the curated public-safe app repository, formerly named `blockchain-galaxy-public`.
 - `private repo` means the separate private source-of-record repository for this project.
 - If a request mentions either term, interpret it as referring to this project unless the user says otherwise.
 
