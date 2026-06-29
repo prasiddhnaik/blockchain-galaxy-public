@@ -15,6 +15,7 @@ import {
   AdditiveBlending,
   BufferGeometry,
   CanvasTexture,
+  DoubleSide,
   Group,
   LinearFilter,
   MeshBasicMaterial,
@@ -608,11 +609,12 @@ function BlockchainScene({
         intensity={18}
         position={[0, 8, -18]}
       />
+      <NebulaDepth prefersReducedMotion={prefersReducedMotion} />
       <Stars
         radius={110}
         depth={60}
-        count={1900}
-        factor={4.2}
+        count={2400}
+        factor={4.4}
         saturation={0.35}
         fade
         speed={0.45}
@@ -810,74 +812,251 @@ function OrbitLine({ orbit }: { orbit: OrbitSpec }) {
   )
 }
 
+function NebulaDepth({ prefersReducedMotion }: { prefersReducedMotion: boolean }) {
+  const tealLayerRef = useRef<Group>(null)
+  const purpleLayerRef = useRef<Group>(null)
+  const goldLayerRef = useRef<Group>(null)
+  const tealMaterialRef = useRef<MeshBasicMaterial>(null)
+  const purpleMaterialRef = useRef<MeshBasicMaterial>(null)
+  const goldMaterialRef = useRef<MeshBasicMaterial>(null)
+
+  useFrame(({ clock }) => {
+    if (prefersReducedMotion) {
+      return
+    }
+
+    const elapsed = clock.elapsedTime
+
+    if (tealLayerRef.current) {
+      tealLayerRef.current.rotation.z = 0.14 + Math.sin(elapsed * 0.055) * 0.018
+      tealLayerRef.current.position.y = -2.5 + Math.sin(elapsed * 0.09) * 0.18
+    }
+
+    if (purpleLayerRef.current) {
+      purpleLayerRef.current.rotation.z = -0.32 + Math.sin(elapsed * 0.043 + 1.1) * 0.016
+      purpleLayerRef.current.position.x = -6.8 + Math.sin(elapsed * 0.07 + 0.4) * 0.2
+    }
+
+    if (goldLayerRef.current) {
+      goldLayerRef.current.rotation.z = 0.48 + Math.sin(elapsed * 0.04 + 2.2) * 0.012
+      goldLayerRef.current.position.x = 7.2 + Math.sin(elapsed * 0.052 + 2.1) * 0.16
+    }
+
+    if (tealMaterialRef.current) {
+      tealMaterialRef.current.opacity = 0.058 + Math.sin(elapsed * 0.32) * 0.012
+    }
+
+    if (purpleMaterialRef.current) {
+      purpleMaterialRef.current.opacity = 0.046 + Math.sin(elapsed * 0.27 + 1.5) * 0.01
+    }
+
+    if (goldMaterialRef.current) {
+      goldMaterialRef.current.opacity = 0.028 + Math.sin(elapsed * 0.22 + 2.4) * 0.007
+    }
+  })
+
+  return (
+    <group position={[0, 0, -16]} renderOrder={-10}>
+      <group ref={purpleLayerRef} position={[-6.8, 2.4, -2]} rotation={[0.12, 0.08, -0.32]}>
+        <mesh scale={[15.5, 5.2, 1]}>
+          <planeGeometry args={[1, 1, 1, 1]} />
+          <meshBasicMaterial
+            ref={purpleMaterialRef}
+            blending={AdditiveBlending}
+            color="#8a5cff"
+            depthWrite={false}
+            opacity={0.05}
+            side={DoubleSide}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+      <group ref={tealLayerRef} position={[1.8, -2.5, -3]} rotation={[-0.08, -0.16, 0.14]}>
+        <mesh scale={[18, 6.8, 1]}>
+          <planeGeometry args={[1, 1, 1, 1]} />
+          <meshBasicMaterial
+            ref={tealMaterialRef}
+            blending={AdditiveBlending}
+            color="#28ffe7"
+            depthWrite={false}
+            opacity={0.062}
+            side={DoubleSide}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+      <group ref={goldLayerRef} position={[7.2, 3.1, -4.4]} rotation={[0.16, -0.12, 0.48]}>
+        <mesh scale={[11.5, 3.8, 1]}>
+          <planeGeometry args={[1, 1, 1, 1]} />
+          <meshBasicMaterial
+            ref={goldMaterialRef}
+            blending={AdditiveBlending}
+            color="#ffd27a"
+            depthWrite={false}
+            opacity={0.032}
+            side={DoubleSide}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      </group>
+    </group>
+  )
+}
+
 function createSolarGranulationTexture() {
   const canvas = document.createElement('canvas')
-  canvas.width = 384
-  canvas.height = 192
+  canvas.width = 512
+  canvas.height = 256
   const context = canvas.getContext('2d')
 
   if (!context) {
     throw new Error('Canvas 2D context is unavailable.')
   }
 
-  const baseGradient = context.createLinearGradient(0, 0, canvas.width, canvas.height)
-  baseGradient.addColorStop(0, '#fff4a8')
-  baseGradient.addColorStop(0.34, '#ffbd55')
-  baseGradient.addColorStop(0.68, '#ff7b32')
-  baseGradient.addColorStop(1, '#df472c')
-  context.fillStyle = baseGradient
-  context.fillRect(0, 0, canvas.width, canvas.height)
+  const image = context.createImageData(canvas.width, canvas.height)
+  const palette = [
+    [54, 6, 10],
+    [126, 18, 18],
+    [226, 72, 35],
+    [255, 174, 60],
+    [255, 246, 177],
+  ]
+  const mixChannel = (start: number, end: number, amount: number) =>
+    Math.round(start + (end - start) * amount)
 
-  for (let y = -12; y < canvas.height + 24; y += 16) {
-    for (let x = -12; x < canvas.width + 24; x += 18) {
-      const noise = Math.sin(x * 0.13 + y * 0.19) + Math.cos(x * 0.09 - y * 0.21)
-      const radius = 6 + Math.abs(noise) * 4
-      const granule = context.createRadialGradient(x, y, 0, x, y, radius)
+  for (let y = 0; y < canvas.height; y += 1) {
+    const v = y / canvas.height
+    const latitude = (v - 0.5) * Math.PI
+    const verticalCore = Math.max(0, 1 - Math.abs(v - 0.5) * 1.85)
 
-      granule.addColorStop(0, noise > 0 ? 'rgb(255 255 215 / 0.42)' : 'rgb(255 92 38 / 0.3)')
-      granule.addColorStop(0.58, noise > 0 ? 'rgb(255 191 77 / 0.24)' : 'rgb(185 46 33 / 0.28)')
-      granule.addColorStop(1, 'rgb(54 8 12 / 0)')
-      context.fillStyle = granule
-      context.beginPath()
-      context.arc(x, y, radius, 0, Math.PI * 2)
-      context.fill()
+    for (let x = 0; x < canvas.width; x += 1) {
+      const u = x / canvas.width
+      const longitude = u * Math.PI * 2
+      const plasma =
+        Math.sin(longitude * 4 + Math.sin(latitude * 2.4) * 1.1) * 0.18 +
+        Math.cos(longitude * 7 - latitude * 3.2) * 0.14 +
+        Math.sin(longitude * 11 + latitude * 5.1) * 0.09 +
+        Math.cos(longitude * 17 - latitude * 8.4) * 0.045
+      const cell =
+        Math.sin(Math.cos(longitude) * 12 + Math.sin(latitude * 2.2) * 7) *
+        Math.cos(Math.sin(longitude) * 10 - Math.cos(latitude * 1.7) * 6)
+      const heat = Math.min(
+        0.98,
+        Math.max(0, 0.43 + verticalCore * 0.34 + plasma + Math.max(0, cell) * 0.18),
+      )
+      const scaled = heat * (palette.length - 1)
+      const index = Math.min(palette.length - 2, Math.floor(scaled))
+      const amount = scaled - index
+      const cold = palette[index]
+      const hot = palette[index + 1]
+      const pixel = (y * canvas.width + x) * 4
+
+      image.data[pixel] = mixChannel(cold[0], hot[0], amount)
+      image.data[pixel + 1] = mixChannel(cold[1], hot[1], amount)
+      image.data[pixel + 2] = mixChannel(cold[2], hot[2], amount)
+      image.data[pixel + 3] = 255
     }
   }
 
-  context.globalCompositeOperation = 'screen'
-  context.lineWidth = 2.2
-  context.lineCap = 'round'
+  context.putImageData(image, 0, 0)
 
-  for (let index = 0; index < 26; index += 1) {
-    const y = 18 + ((index * 37) % canvas.height)
-    const amplitude = 5 + (index % 5) * 1.8
+  context.globalCompositeOperation = 'screen'
+  for (let y = -24; y < canvas.height + 32; y += 34) {
+    for (let x = -32; x < canvas.width + 48; x += 42) {
+      const wave =
+        Math.sin(x * 0.08) +
+        Math.cos(y * 0.11) +
+        Math.sin((x + y) * 0.045)
+      const radius = 14 + Math.abs(wave) * 11
+      const mirroredX = ((x % canvas.width) + canvas.width) % canvas.width
+      const granule = context.createRadialGradient(mirroredX, y, 0, mirroredX, y, radius)
+
+      granule.addColorStop(0, wave > 0 ? 'rgb(255 251 203 / 0.36)' : 'rgb(255 154 63 / 0.22)')
+      granule.addColorStop(0.62, 'rgb(255 111 48 / 0.13)')
+      granule.addColorStop(1, 'rgb(255 111 48 / 0)')
+      context.fillStyle = granule
+      context.beginPath()
+      context.arc(mirroredX, y, radius, 0, Math.PI * 2)
+      context.fill()
+
+      if (mirroredX < radius) {
+        context.beginPath()
+        context.arc(mirroredX + canvas.width, y, radius, 0, Math.PI * 2)
+        context.fill()
+      }
+
+      if (mirroredX > canvas.width - radius) {
+        context.beginPath()
+        context.arc(mirroredX - canvas.width, y, radius, 0, Math.PI * 2)
+        context.fill()
+      }
+    }
+  }
+
+  context.globalCompositeOperation = 'multiply'
+  context.lineWidth = 5.5
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+
+  for (let index = 0; index < 18; index += 1) {
+    const y = 12 + ((index * 47) % canvas.height)
+    const amplitude = 11 + (index % 4) * 3.5
 
     context.beginPath()
-    for (let x = 0; x <= canvas.width; x += 8) {
+    for (let x = -12; x <= canvas.width + 12; x += 10) {
       const waveY =
         y +
-        Math.sin(x * 0.036 + index * 1.7) * amplitude +
-        Math.sin(x * 0.083 + index) * 2
+        Math.sin(x * 0.025 + index * 1.55) * amplitude +
+        Math.sin(x * 0.064 + index * 0.7) * 4
 
-      if (x === 0) {
+      if (x === -12) {
         context.moveTo(x, waveY)
       } else {
         context.lineTo(x, waveY)
       }
     }
     context.strokeStyle =
-      index % 3 === 0 ? 'rgb(255 250 185 / 0.28)' : 'rgb(255 115 54 / 0.18)'
+      index % 3 === 0 ? 'rgb(46 5 10 / 0.34)' : 'rgb(93 13 15 / 0.22)'
+    context.stroke()
+  }
+
+  context.globalCompositeOperation = 'screen'
+  context.lineWidth = 3.4
+  context.lineCap = 'round'
+
+  for (let index = 0; index < 24; index += 1) {
+    const y = 18 + ((index * 53) % canvas.height)
+    const amplitude = 8 + (index % 5) * 2.5
+
+    context.beginPath()
+    for (let x = -8; x <= canvas.width + 8; x += 8) {
+      const waveY =
+        y +
+        Math.sin(x * 0.03 + index * 1.7) * amplitude +
+        Math.sin(x * 0.087 + index) * 2.8
+
+      if (x === -8) {
+        context.moveTo(x, waveY)
+      } else {
+        context.lineTo(x, waveY)
+      }
+    }
+    context.strokeStyle =
+      index % 4 === 0 ? 'rgb(255 252 190 / 0.44)' : 'rgb(255 130 52 / 0.28)'
     context.stroke()
   }
 
   context.globalCompositeOperation = 'multiply'
-  context.fillStyle = 'rgb(118 20 24 / 0.16)'
+  context.fillStyle = 'rgb(76 8 13 / 0.12)'
   context.fillRect(0, 0, canvas.width, canvas.height)
 
   const texture = new CanvasTexture(canvas)
   texture.wrapS = RepeatWrapping
   texture.wrapT = RepeatWrapping
-  texture.repeat.set(1.55, 1.12)
+  texture.repeat.set(1, 1)
   texture.magFilter = LinearFilter
   texture.minFilter = LinearFilter
   texture.needsUpdate = true
@@ -910,32 +1089,36 @@ function Sun({
 
     if (surfaceRef.current) {
       const convectionPulse =
-        1 + Math.sin(elapsed * 1.6) * 0.006 + Math.sin(elapsed * 2.7) * 0.004
+        1 + Math.sin(elapsed * 1.6) * 0.008 + Math.sin(elapsed * 2.7) * 0.006
 
-      surfaceRef.current.rotation.y = elapsed * 0.105
-      surfaceRef.current.rotation.x = Math.sin(elapsed * 0.22) * 0.025
-      surfaceRef.current.rotation.z = Math.sin(elapsed * 0.34) * 0.035
+      surfaceRef.current.rotation.y = elapsed * 0.16
+      surfaceRef.current.rotation.x = Math.sin(elapsed * 0.26) * 0.032
+      surfaceRef.current.rotation.z = Math.sin(elapsed * 0.38) * 0.046
       surfaceRef.current.scale.setScalar(convectionPulse)
     }
 
+    surfaceMap.offset.x = (elapsed * 0.018) % 1
+    surfaceMap.offset.y = (elapsed * 0.006) % 1
+    surfaceMap.repeat.set(1, 1)
+
     if (hotShellMaterialRef.current) {
       hotShellMaterialRef.current.opacity =
-        0.16 + Math.sin(elapsed * 2.9) * 0.028 + Math.sin(elapsed * 5.1) * 0.014
+        0.12 + Math.sin(elapsed * 2.9) * 0.02 + Math.sin(elapsed * 5.1) * 0.012
     }
 
     if (flareOneRef.current) {
-      const flareScale = 1 + Math.sin(elapsed * 1.8) * 0.08
+      const flareScale = 1 + Math.sin(elapsed * 1.8) * 0.11
 
-      flareOneRef.current.rotation.z = elapsed * 0.18
-      flareOneRef.current.rotation.y = Math.sin(elapsed * 0.44) * 0.16
+      flareOneRef.current.rotation.z = elapsed * 0.24
+      flareOneRef.current.rotation.y = Math.sin(elapsed * 0.44) * 0.2
       flareOneRef.current.scale.set(1.16 * flareScale, 0.64, 1)
     }
 
     if (flareTwoRef.current) {
-      const flareScale = 1 + Math.sin(elapsed * 1.35 + 1.7) * 0.1
+      const flareScale = 1 + Math.sin(elapsed * 1.35 + 1.7) * 0.13
 
-      flareTwoRef.current.rotation.z = -elapsed * 0.13
-      flareTwoRef.current.rotation.x = Math.sin(elapsed * 0.39 + 0.8) * 0.13
+      flareTwoRef.current.rotation.z = -elapsed * 0.18
+      flareTwoRef.current.rotation.x = Math.sin(elapsed * 0.39 + 0.8) * 0.18
       flareTwoRef.current.scale.set(0.76, 1.24 * flareScale, 1)
     }
 
@@ -948,15 +1131,15 @@ function Sun({
     }
 
     if (flareOneMaterialRef.current) {
-      flareOneMaterialRef.current.opacity = 0.46 + Math.sin(elapsed * 3.4) * 0.12
+      flareOneMaterialRef.current.opacity = 0.52 + Math.sin(elapsed * 3.4) * 0.15
     }
 
     if (flareTwoMaterialRef.current) {
-      flareTwoMaterialRef.current.opacity = 0.32 + Math.sin(elapsed * 2.8 + 1.1) * 0.1
+      flareTwoMaterialRef.current.opacity = 0.36 + Math.sin(elapsed * 2.8 + 1.1) * 0.12
     }
 
     if (flareThreeMaterialRef.current) {
-      flareThreeMaterialRef.current.opacity = 0.18 + Math.sin(elapsed * 2.1 + 2.2) * 0.07
+      flareThreeMaterialRef.current.opacity = 0.22 + Math.sin(elapsed * 2.1 + 2.2) * 0.085
     }
 
     if (coronaRef.current) {
@@ -1776,11 +1959,21 @@ function WarpOverlay({
         prefersReducedMotion ? 'is-reduced-motion' : '',
       ].join(' ')}
     >
+      <div className="warp-overlay__vortex" />
       <div className="warp-overlay__tunnel">
-        {Array.from({ length: 28 }, (_, index) => (
-          <span key={index} style={{ '--i': index } as CSSProperties} />
+        {Array.from({ length: 32 }, (_, index) => (
+          <span
+            key={index}
+            style={
+              {
+                '--i': index,
+                '--warp-delay': `${(index % 6) * 14}ms`,
+              } as CSSProperties
+            }
+          />
         ))}
       </div>
+      <div className="warp-overlay__chromatic" />
       <div className="warp-overlay__flash" />
       <div className="warp-overlay__label">{label}</div>
     </div>

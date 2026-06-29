@@ -7,9 +7,25 @@
   height: 100svh;
   overflow: hidden;
   background:
+    radial-gradient(ellipse at 58% 48%, rgba(53, 245, 222, 0.105), transparent 24%),
+    radial-gradient(ellipse at 34% 42%, rgba(156, 108, 255, 0.115), transparent 28%),
+    radial-gradient(ellipse at 76% 72%, rgba(255, 210, 122, 0.055), transparent 22%),
     radial-gradient(circle at 28% 18%, rgba(116, 63, 255, 0.22), transparent 30%),
     radial-gradient(circle at 74% 58%, rgba(26, 226, 218, 0.12), transparent 28%),
     #03040b;
+}
+
+.galaxy-shell::before {
+  position: absolute;
+  inset: -12%;
+  z-index: 0;
+  background:
+    linear-gradient(115deg, transparent 16%, rgba(53, 245, 222, 0.035) 38%, transparent 62%),
+    linear-gradient(32deg, transparent 18%, rgba(156, 108, 255, 0.04) 44%, transparent 70%);
+  content: '';
+  filter: blur(18px);
+  opacity: 0.76;
+  pointer-events: none;
 }
 
 .galaxy-shell::after {
@@ -83,6 +99,40 @@
   animation-duration: 520ms;
 }
 
+.warp-overlay__vortex {
+  position: absolute;
+  inset: -20%;
+  opacity: 0;
+  background:
+    repeating-conic-gradient(
+      from 0deg at 50% 50%,
+      rgba(255, 255, 255, 0) 0deg 12deg,
+      rgba(40, 255, 231, 0.13) 13deg 14deg,
+      rgba(155, 63, 255, 0.11) 15deg 16deg,
+      rgba(255, 255, 255, 0) 17deg 34deg
+    ),
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.16), rgba(40, 255, 231, 0.06) 18%, transparent 50%);
+  filter: blur(1.2px);
+  transform: scale(0.25) rotate(0deg);
+  will-change: opacity, transform;
+}
+
+.warp-overlay.is-active .warp-overlay__vortex {
+  animation: warp-vortex 6200ms cubic-bezier(0.76, 0, 0.2, 1) forwards;
+}
+
+.warp-overlay.is-returning .warp-overlay__vortex {
+  background:
+    repeating-conic-gradient(
+      from 0deg at 50% 50%,
+      rgba(255, 255, 255, 0) 0deg 12deg,
+      rgba(155, 63, 255, 0.14) 13deg 14deg,
+      rgba(40, 255, 231, 0.1) 15deg 16deg,
+      rgba(255, 255, 255, 0) 17deg 34deg
+    ),
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.16), rgba(155, 63, 255, 0.07) 18%, transparent 50%);
+}
+
 .warp-overlay__tunnel {
   position: absolute;
   inset: 0;
@@ -94,31 +144,48 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 48vw;
+  width: 52vw;
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0), #ffffff, #28ffe7);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), #ffffff 32%, #28ffe7 66%, rgba(155, 63, 255, 0.42));
   box-shadow:
-    0 0 12px rgba(40, 255, 231, 0.8),
-    0 0 22px rgba(155, 63, 255, 0.48);
+    0 0 10px rgba(40, 255, 231, 0.72),
+    0 0 20px rgba(155, 63, 255, 0.42);
   opacity: 0;
   transform:
-    rotate(calc(var(--i) * 13deg))
+    rotate(calc(var(--i) * 11.25deg))
     translateX(3vw)
     scaleX(0);
   transform-origin: left center;
+  will-change: opacity, transform;
 }
 
 .warp-overlay.is-active .warp-overlay__tunnel span {
   animation: warp-streak 6200ms cubic-bezier(0.74, 0, 0.2, 1) forwards;
-  animation-delay: calc(var(--i) * 18ms);
+  animation-delay: var(--warp-delay, 0ms);
 }
 
 .warp-overlay.is-returning .warp-overlay__tunnel span {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0), #ffffff, #9b3fff);
 }
 
-.warp-overlay.is-reduced-motion .warp-overlay__tunnel {
+.warp-overlay__chromatic {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background:
+    linear-gradient(90deg, rgba(155, 63, 255, 0.14), transparent 24%, transparent 76%, rgba(40, 255, 231, 0.14)),
+    radial-gradient(circle at 50% 50%, transparent 0 30%, rgba(255, 255, 255, 0.06) 44%, rgba(3, 4, 11, 0.3) 72%);
+  will-change: opacity;
+}
+
+.warp-overlay.is-active .warp-overlay__chromatic {
+  animation: warp-chromatic 6200ms ease-in-out forwards;
+}
+
+.warp-overlay.is-reduced-motion .warp-overlay__tunnel,
+.warp-overlay.is-reduced-motion .warp-overlay__vortex,
+.warp-overlay.is-reduced-motion .warp-overlay__chromatic {
   display: none;
 }
 
@@ -126,8 +193,9 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.14) 24%, transparent 58%);
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.18) 22%, rgba(40, 255, 231, 0.1) 38%, transparent 62%);
   opacity: 0;
+  will-change: opacity;
 }
 
 .warp-overlay.is-active .warp-overlay__flash {
@@ -150,6 +218,7 @@
   text-transform: uppercase;
   transform: translateX(-50%) translateY(12px);
   white-space: nowrap;
+  will-change: opacity, transform;
 }
 
 .warp-overlay.is-active .warp-overlay__label {
@@ -169,11 +238,11 @@
     opacity: 1;
   }
   45% {
-    background-color: rgba(10, 12, 36, 0.22);
+    background-color: rgba(10, 12, 36, 0.34);
   }
   72% {
     opacity: 1;
-    background-color: rgba(255, 255, 255, 0.08);
+    background-color: rgba(255, 255, 255, 0.13);
   }
   100% {
     opacity: 0;
@@ -181,11 +250,33 @@
   }
 }
 
+@keyframes warp-vortex {
+  0% {
+    opacity: 0;
+    transform: scale(0.18) rotate(0deg);
+  }
+  22% {
+    opacity: 0.28;
+  }
+  55% {
+    opacity: 0.44;
+    transform: scale(1.02) rotate(104deg);
+  }
+  78% {
+    opacity: 0.28;
+    transform: scale(1.46) rotate(172deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.86) rotate(226deg);
+  }
+}
+
 @keyframes warp-streak {
   0% {
     opacity: 0;
     transform:
-      rotate(calc(var(--i) * 13deg))
+      rotate(calc(var(--i) * 11.25deg))
       translateX(3vw)
       scaleX(0);
   }
@@ -195,23 +286,39 @@
   48% {
     opacity: 0.95;
     transform:
-      rotate(calc(var(--i) * 13deg))
-      translateX(6vw)
-      scaleX(0.8);
+      rotate(calc(var(--i) * 11.25deg))
+      translateX(4vw)
+      scaleX(1.2);
   }
   78% {
-    opacity: 0.72;
+    opacity: 0.68;
     transform:
-      rotate(calc(var(--i) * 13deg))
-      translateX(28vw)
+      rotate(calc(var(--i) * 11.25deg))
+      translateX(24vw)
       scaleX(2.35);
   }
   100% {
     opacity: 0;
     transform:
-      rotate(calc(var(--i) * 13deg))
+      rotate(calc(var(--i) * 11.25deg))
       translateX(52vw)
       scaleX(0.2);
+  }
+}
+
+@keyframes warp-chromatic {
+  0%,
+  25% {
+    opacity: 0;
+  }
+  48% {
+    opacity: 0.34;
+  }
+  72% {
+    opacity: 0.58;
+  }
+  100% {
+    opacity: 0;
   }
 }
 
